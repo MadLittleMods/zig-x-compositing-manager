@@ -18,18 +18,20 @@ Guides and blog posts:
  - https://www.talisman.org/~erlkonig/misc/x11-composite-tutorial/
 
 
-Compositing window manager examples:
+Compositing manager examples:
 
  - Extremely basic X11 compositing window manager written in C with Xlib and OpenGL: https://github.com/obiwac/x-compositing-wm
  - Sample X compositing manager (the original demo): https://gitlab.freedesktop.org/xorg/app/xcompmgr
     - `xcompmgr` is a sample compositing manager for X servers supporting the `XFIXES`, `DAMAGE`, `RENDER`, and `COMPOSITE` extensions.  It enables basic eye-candy effects.
-
+ - https://github.com/gustavosbarreto/compmgr
+ - https://projects.mini-dweeb.org/projects/unagi
 
 Other window manager examples:
 
  - https://github.com/mackstann/tinywm
  - https://github.com/Airblader/node-tinywm
  - [https://github.com/sidorares/node-x11/examples/windowmanager/wm.js](https://github.com/sidorares/node-x11/blob/070877bd71276b69f973f487d20969743ed3ec6d/examples/windowmanager/wm.js)
+ - https://code.google.com/archive/p/winmalist/
 
 
 ## Relevant tools

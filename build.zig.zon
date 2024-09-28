@@ -1,0 +1,13 @@
+.{
+    .name = "aim-analyzer",
+    .version = "0.1.0",
+    .paths = .{
+        "",
+    },
+    .dependencies = .{
+        .zigx = .{
+            .url = "https://github.com/MadLittleMods/zigx/archive/f63ccdf5893deedbe92f165a9a48cf6633c5865b.tar.gz",
+            .hash = "1220e03a45c906433e52bede2c059e8a1981263677f0758cc074c29fe2f7c31a35bf",
+        },
+    },
+}

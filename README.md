@@ -4,9 +4,9 @@ blending (compositing) to windows.
 Normally, you'd get this same functionality for free via your desktop environment's
 window manager which probably includes a "compositing manager".
 
-This project is useful to use when you're running in a virtual X environment like `Xvfb`
-(X virtual framebuffer) or `Xephyr` and need to work with multiple windows that overlay
-on top of each other.
+This project is useful when you're running in a virtual X environment like `Xvfb` (X
+virtual framebuffer) or `Xephyr` and need to work with multiple windows that overlay on
+top of each other.
 
 To paraphrase from the [*Adding
 Transparency*](https://magcius.github.io/xplain/article/composite.html) page in the
