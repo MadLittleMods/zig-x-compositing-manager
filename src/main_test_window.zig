@@ -68,6 +68,8 @@ pub fn main() !void {
     );
 
     // Get some font information
+    //
+    // FIXME: Might be better to use `x.query_font` instead
     {
         // We're using an "m" character because it's typically the widest character in the font
         const text_literal = [_]u16{'m'};
@@ -91,7 +93,7 @@ pub fn main() !void {
             },
             else => |msg| {
                 std.log.err("expected a reply for `x.query_text_extents` but got {}", .{msg});
-                return error.ExpecetedReplyForQueryTextExtents;
+                return error.ExpectedReplyForQueryTextExtents;
             },
         }
     };

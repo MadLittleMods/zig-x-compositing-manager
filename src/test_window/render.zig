@@ -220,6 +220,10 @@ pub const RenderContext = struct {
         const elapsed_ms = current_timestamp_ms - self.state.start_timestamp_ms;
 
         // Render some text to the center of the window
+        //
+        // It would be nice if we could use `font-variant-numeric: tabular-nums;` (from
+        // CSS) to make the numbers not jiggle as much when they change. We could also
+        // use a monospace font as a cheap way out.
         try render_utils.renderString(
             sock,
             self.ids.window,
@@ -228,9 +232,13 @@ pub const RenderContext = struct {
             @divFloor(self.state.window_dimensions.width, 2),
             @divFloor(self.state.window_dimensions.height, 2),
             render_utils.PositionOrigin.init(.{ .keyword = .center }, .{ .keyword = .center }),
-            "Elapsed time: {}",
+            // To stop things from jiggling around, just pad this number with spaces.
+            // This strategy is flawed as it will start jiggling once enough time has
+            // elapsed (1 hour) and what we really want is to be able to do is specify
+            // the ms precision/padding that we want.
+            "Elapsed time: {s:<10}",
             .{
-                std.fmt.fmtDuration(@intCast(std.time.ns_per_ms * elapsed_ms)),
+                std.fmt.fmtDurationSigned(std.time.ns_per_ms * elapsed_ms),
             },
         );
     }
