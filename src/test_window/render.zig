@@ -215,39 +215,22 @@ pub const RenderContext = struct {
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
         const sock = self.sock.*;
-        const ids = self.ids.*;
-        const font_dims = self.font_dims.*;
-        const state = self.state.*;
-
-        const window_id = ids.window;
-
-        // Draw a big blue square in the middle of the window
-        {
-            var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-            x.poly_fill_rectangle.serialize(&msg, .{
-                .drawable_id = window_id,
-                .gc_id = ids.bg_gc,
-            }, &[_]x.Rectangle{
-                .{ .x = 100, .y = 100, .width = 200, .height = 200 },
-            });
-            try common.send(sock, &msg);
-        }
 
         const current_timestamp_ms = std.time.milliTimestamp();
-        const elapsed_ms = current_timestamp_ms - state.start_timestamp_ms;
+        const elapsed_ms = current_timestamp_ms - self.state.start_timestamp_ms;
 
-        // Render some text in the middle of the square cut-out
-        const elapsed_text = "Elapsed time: {d} ms";
-        const text_width: i16 = @intCast(font_dims.width * elapsed_text.len);
+        // Render some text to the center of the window
         try render_utils.renderString(
             sock,
-            window_id,
-            ids.fg_gc,
-            @divFloor(state.window_dimensions.width - text_width, 2) + font_dims.font_left,
-            @divFloor(state.window_dimensions.height - font_dims.height, 2) + font_dims.font_ascent,
-            elapsed_text,
+            self.ids.window,
+            self.ids.fg_gc,
+            self.font_dims,
+            @divFloor(self.state.window_dimensions.width, 2),
+            @divFloor(self.state.window_dimensions.height, 2),
+            render_utils.PositionOrigin.init(.{ .keyword = .center }, .{ .keyword = .center }),
+            "Elapsed time: {}",
             .{
-                elapsed_ms,
+                std.fmt.fmtDuration(@intCast(std.time.ns_per_ms * elapsed_ms)),
             },
         );
     }
