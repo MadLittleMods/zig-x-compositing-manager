@@ -5,6 +5,12 @@ const render = @import("test_window/render.zig");
 const AppState = @import("test_window/app_state.zig").AppState;
 const render_utils = @import("utils/render_utils.zig");
 
+// Example:
+// DISPLAY=:99 zig build run-test_window -- 0 0 0xaaff6622
+//
+// Arg 0: X position
+// Arg 1: Y position
+// Arg 2: Window background color
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -12,6 +18,13 @@ pub fn main() !void {
         .ok => {},
         .leak => std.log.err("GPA allocator: Memory leak detected", .{}),
     };
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+    const position_x = try std.fmt.parseInt(i16, args[1], 10);
+    const position_y = try std.fmt.parseInt(i16, args[2], 10);
+    // 0xAARRGGBB
+    const window_background_color = try std.fmt.parseInt(u32, args[3], 0);
 
     try x.wsaStartup();
     const conn = try common.connect(allocator);
@@ -53,8 +66,9 @@ pub fn main() !void {
     // TODO: maybe need to call conn.setup.verify or something?
 
     const state = AppState{
-        .window_position = render_utils.Coordinate(i16){ .x = 0, .y = 0 },
+        .window_position = render_utils.Coordinate(i16){ .x = position_x, .y = position_y },
         .window_dimensions = render_utils.Dimensions{ .width = 200, .height = 200 },
+        .window_background_color = window_background_color,
         .start_timestamp_ms = std.time.milliTimestamp(),
     };
 

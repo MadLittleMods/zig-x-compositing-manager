@@ -68,6 +68,7 @@ pub fn createResources(
 
     const window_position = state.window_position;
     const window_dimensions = state.window_dimensions;
+    const window_background_color = state.window_background_color;
 
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_allocator.deinit();
@@ -117,7 +118,7 @@ pub fn createResources(
             .bg_pixmap = .none,
             // 0xAARRGGBB
             // Required when `depth` is set to 32
-            .bg_pixel = 0xaa006660,
+            .bg_pixel = window_background_color,
             // .border_pixmap =
             // Required when `depth` is set to 32
             .border_pixel = 0x00000000,

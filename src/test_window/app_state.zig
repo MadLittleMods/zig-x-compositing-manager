@@ -7,5 +7,9 @@ pub const AppState = struct {
     /// The pixel dimensions of our window
     window_dimensions: render_utils.Dimensions,
 
+    /// 0xAARRGGBB
+    window_background_color: u32,
+
+    /// When the application started
     start_timestamp_ms: i64,
 };
