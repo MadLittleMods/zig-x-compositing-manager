@@ -16,6 +16,11 @@ Guides and blog posts:
  - https://magcius.github.io/xplain/article/composite.html
  - https://wingolog.org/archives/2008/07/26/so-you-want-to-build-a-compositor
  - https://www.talisman.org/~erlkonig/misc/x11-composite-tutorial/
+ - https://jichu4n.com/posts/how-x-window-managers-work-and-how-to-write-one-part-i/
+
+Other window manager articles:
+
+ - https://www.uninformativ.de/blog/postings/2016-01-05/0/POSTING-en.html
 
 
 Compositing manager examples:
@@ -28,6 +33,17 @@ Compositing manager examples:
 
 Other window manager examples:
 
+ - Written in Zig:
+   - Tiling window manager: https://github.com/isaac-westaway/Zenith
+   - Tiling window manager: https://github.com/MaFackler/uwm
+   - Tiling window manager: https://github.com/Luukdegram/juicebox
+   - https://github.com/erikbackman/ewm
+   - https://github.com/Eloitor/ZigWindowManager
+   - Tiling window manager: https://github.com/zuranthus/zwm
+   - Tiling window manager: https://github.com/pra1rie/fuckwm
+   - https://github.com/last-arg/buoy
+   - Tiling window manager: https://github.com/chip2n/zwm
+   - https://github.com/Polymethylmethacrylat/m349wm
  - https://github.com/mackstann/tinywm
  - https://github.com/Airblader/node-tinywm
  - [https://github.com/sidorares/node-x11/examples/windowmanager/wm.js](https://github.com/sidorares/node-x11/blob/070877bd71276b69f973f487d20969743ed3ec6d/examples/windowmanager/wm.js)
@@ -44,3 +60,5 @@ Other window manager examples:
    create a new X11 screen that appears as a window on your desktop.
     - `Xephyr :99 -screen 1920x1080x24`: Creates a new 1920x1080 display with 24-bit
       color depth. Then you can run `DISPLAY=:99 firefox` to run Firefox on that display.
+    - `Xephyr :99 +extension COMPOSITE -screen 300x300x24` Create a new display with the
+      composite extension enabled.
