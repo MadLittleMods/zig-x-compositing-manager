@@ -1,4 +1,4 @@
-A basic "compositing manager" for the X Window System that adds transparency/alpha
+A basic "compositing manager" (aka compositor) for the X Window System that adds transparency/alpha
 blending (compositing) to windows.
 
 Normally, you'd get this same functionality for free via your desktop environment's
