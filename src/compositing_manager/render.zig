@@ -121,7 +121,7 @@ pub fn createResources(
             .bg_pixmap = .none,
             // 0xAARRGGBB
             // Required when `depth` is set to 32
-            .bg_pixel = 0xff00ff00,
+            .bg_pixel = 0x00000000,
             // .border_pixmap =
             // Required when `depth` is set to 32
             .border_pixel = 0x00000000,

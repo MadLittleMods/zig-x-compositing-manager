@@ -195,6 +195,25 @@ pub fn main() !void {
         try conn.send(&msg);
     }
 
+    // We want to know when a window is created/destroyed, moved, resized, show/hide,
+    // stacking order change, so we can reflect the change.
+    {
+        var message_buffer: [x.change_window_attributes.max_len]u8 = undefined;
+        const len = x.change_window_attributes.serialize(&message_buffer, ids.root, .{
+            .event_mask = x.event.substructure_redirect, //| x.event.substructure_notify,
+        });
+        try conn.send(message_buffer[0..len]);
+    }
+
+    // Show the window. In the X11 protocol is called mapping a window, and hiding a
+    // window is called unmapping. When windows are initially created, they are unmapped
+    // (or hidden).
+    {
+        var msg: [x.map_window.len]u8 = undefined;
+        x.map_window.serialize(&msg, ids.window);
+        try conn.send(&msg);
+    }
+
     // Draw a big blue square in the middle of the window
     {
         var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
@@ -214,25 +233,6 @@ pub fn main() !void {
         }, &[_]x.Rectangle{
             .{ .x = 10, .y = 10, .width = 200, .height = 200 },
         });
-        try conn.send(&msg);
-    }
-
-    // We want to know when a window is created/destroyed, moved, resized, show/hide,
-    // stacking order change, so we can reflect the change.
-    {
-        var message_buffer: [x.change_window_attributes.max_len]u8 = undefined;
-        const len = x.change_window_attributes.serialize(&message_buffer, ids.root, .{
-            .event_mask = x.event.substructure_redirect, //| x.event.substructure_notify,
-        });
-        try conn.send(message_buffer[0..len]);
-    }
-
-    // Show the window. In the X11 protocol is called mapping a window, and hiding a
-    // window is called unmapping. When windows are initially created, they are unmapped
-    // (or hidden).
-    {
-        var msg: [x.map_window.len]u8 = undefined;
-        x.map_window.serialize(&msg, ids.window);
         try conn.send(&msg);
     }
 
