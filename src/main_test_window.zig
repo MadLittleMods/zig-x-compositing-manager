@@ -128,7 +128,9 @@ pub fn main() !void {
         .state = &state,
     };
 
-    // Keep drawing the window so the elapsed time is updated
+    // Keep drawing the window so the elapsed time is updated. We just want *something*
+    // that changes to show that the window contents are being updated when using the
+    // "compositing manager".
     while (true) {
         try render_context.render();
         // We don't need to render so often as the display refresh rate is only so fast.

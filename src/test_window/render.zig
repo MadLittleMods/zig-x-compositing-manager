@@ -220,7 +220,9 @@ pub const RenderContext = struct {
         const current_timestamp_ms = std.time.milliTimestamp();
         const elapsed_ms = current_timestamp_ms - self.state.start_timestamp_ms;
 
-        // Render some text to the center of the window
+        // Render some text to the center of the window. We just want some text that
+        // changes to show that the window contents are being updated when using the
+        // "compositing manager".
         //
         // It would be nice if we could use `font-variant-numeric: tabular-nums;` (from
         // CSS) to make the numbers not jiggle as much when they change. We could also
