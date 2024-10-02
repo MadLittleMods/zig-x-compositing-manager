@@ -2,10 +2,11 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const render = @import("compositing_manager/render.zig");
-const AppState = @import("compositing_manager/app_state.zig").AppState;
+const app_state = @import("compositing_manager/app_state.zig");
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_composite_extension = @import("x11/x_composite_extension.zig");
 const x_shape_extension = @import("x11/x_shape_extension.zig");
+const x_render_extension = @import("x11/x_render_extension.zig");
 const render_utils = @import("utils/render_utils.zig");
 
 // In order to create the total screen presentation we need to create a render picture
@@ -95,17 +96,65 @@ pub fn main() !void {
         },
     );
 
+    // We use the X Render extension for capturing screenshots and splatting them onto
+    // our window. Useful because their "composite" request works with mismatched depths
+    // between the source and destinations.
+    const optional_render_extension = try x11_extension_utils.getExtensionInfo(
+        conn.sock,
+        &buffer,
+        "RENDER",
+    );
+    const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
+
+    try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
+        conn.sock,
+        &buffer,
+        &render_extension,
+        .{
+            // We arbitrarily require version 0.11 of the X Render extension just
+            // because it's the latest but came out in 2009 so it's pretty much
+            // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
+            // in 0.0.
+            //
+            // For more info on what's changed in each version, see the "15. Extension
+            // Versioning" section of the X Render extension protocol docs,
+            // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
+            .major_version = 0,
+            .minor_version = 11,
+        },
+    );
+
+    // Assemble a map of X extension info
+    const extensions = x11_extension_utils.Extensions(&.{ .composite, .shape, .render }){
+        .composite = composite_extension,
+        .shape = shape_extension,
+        .render = render_extension,
+    };
+
     // Redirect all of the subwindows of the root window to offscreen storage.
     {
         var message_buffer: [x.composite.redirect_subwindows.len]u8 = undefined;
         x.composite.redirect_subwindows.serialize(&message_buffer, composite_extension.opcode, .{
             .window_id = screen.root,
+            // With both `.manual` and `.automatic` redirection, the X server will
+            // redirect the output to offscreen storage. The difference is that with
+            // `.manual`, the X server will not automatically update the root window or
+            // overlay window when the window contents change.
+            //
+            // Since the X server doesn't handle alpha/transparency, we want `.manual`
+            // redirection so we can composite the window contents to our final overlay
+            // window ourselves taking alpha/transparency into account.
             .update_type = .manual,
         });
         try conn.send(&message_buffer);
     }
 
-    // Get the overlay window that we can draw on
+    // Get the overlay window that we can draw on without interference. This window is
+    // always above normal windows and is always below the screen saver window. It has
+    // the same size of the root window.
+    //
+    // Calling `get_overlay_window` automatically maps/shows the overlay window if it hasn't
+    // been mapped yet.
     {
         var message_buffer: [x.composite.get_overlay_window.len]u8 = undefined;
         x.composite.get_overlay_window.serialize(&message_buffer, composite_extension.opcode, .{
@@ -135,7 +184,7 @@ pub fn main() !void {
     );
     std.log.debug("ids: {any}", .{ids});
 
-    // 32-bit depth so we can use ARGB colors (alpha/transparency)
+    // We're using 32-bit depth so we can use ARGB colors that include alpha/transparency
     const depth = 32;
 
     const root_screen_dimensions = render_utils.Dimensions{
@@ -143,10 +192,16 @@ pub fn main() !void {
         .height = @intCast(screen.pixel_height),
     };
 
-    const state = AppState{
+    var window_list = std.ArrayList(app_state.Window).init(allocator);
+    defer window_list.deinit();
+    const state = app_state.AppState{
         .root_screen_dimensions = root_screen_dimensions,
+        .windows = &window_list,
     };
 
+    // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
+    // going to create our own window with 32-bit depth with the same dimensions as
+    // overlay/root with the `overlay_window_id` as the parent.
     try render.createResources(
         conn.sock,
         &buffer,
@@ -200,7 +255,20 @@ pub fn main() !void {
     {
         var message_buffer: [x.change_window_attributes.max_len]u8 = undefined;
         const len = x.change_window_attributes.serialize(&message_buffer, ids.root, .{
-            .event_mask = x.event.substructure_redirect, //| x.event.substructure_notify,
+            // `substructure_notify` allows us to listen for all of the `xxx_notify`
+            // events like window creation/destruction (i.e.
+            // `create_notify`/`destroy_notify`), moved, resized, visibility, stacking
+            // order change, etc.
+            .event_mask = x.event.substructure_notify,
+            // `substructure_redirect` changes how the server handles requests. When
+            // `substructure_redirect` is set, instead of the X server processing
+            // requests from windows directly, they are redirected to us (the window
+            // manager) as `xxx_request` events with the same arguments as the actual
+            // request and we can either grant, deny or modify them by making a new
+            // request ourselves. For example, if we get a `configure_request` event, we
+            // can make a `configure_window` request with what we see fit.
+            //
+            // | x.event.substructure_redirect,
         });
         try conn.send(message_buffer[0..len]);
     }
@@ -214,66 +282,88 @@ pub fn main() !void {
         try conn.send(&msg);
     }
 
-    // Draw a big blue square in the middle of the window
-    {
-        var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-        x.poly_fill_rectangle.serialize(&msg, .{
-            .drawable_id = ids.window,
-            .gc_id = ids.bg_gc,
-        }, &[_]x.Rectangle{
-            .{ .x = 100, .y = 100, .width = 200, .height = 200 },
-        });
-        try conn.send(&msg);
+    var render_context = render.RenderContext{
+        .sock = &conn.sock,
+        .ids = &ids,
+        .extensions = &extensions,
+        .state = &state,
+    };
+
+    while (true) {
+        {
+            const receive_buffer = buffer.nextReadBuffer();
+            if (receive_buffer.len == 0) {
+                std.log.err("buffer size {} not big enough!", .{buffer.half_len});
+                return error.BufferSizeNotBigEnough;
+            }
+            const len = try x.readSock(conn.sock, receive_buffer, 0);
+            if (len == 0) {
+                std.log.info("X server connection closed", .{});
+                return;
+            }
+            buffer.reserve(len);
+        }
+
+        while (true) {
+            const data = buffer.nextReservedBuffer();
+            if (data.len < 32)
+                break;
+            const msg_len = x.parseMsgLen(data[0..32].*);
+            if (data.len < msg_len)
+                break;
+            buffer.release(msg_len);
+
+            //buf.resetIfEmpty();
+            switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
+                .err => |msg| {
+                    std.log.err("Received X error: {}", .{msg});
+                    return error.ReceivedXError;
+                },
+                // When our 32-bit overlay window is mapped/shown
+                .expose => |msg| {
+                    std.log.info("expose: {}", .{msg});
+                    try render_context.render();
+                },
+                .create_notify => |msg| {
+                    std.log.info("create_notify: {}", .{msg});
+                    try state.windows.append(.{
+                        .window_id = msg.window_id,
+                        .x = msg.x_position,
+                        .y = msg.y_position,
+                        .width = msg.width,
+                        .height = msg.height,
+                    });
+                    try render_context.render();
+                },
+                .destroy_notify => |msg| {
+                    std.log.info("destroy_notify: {}", .{msg});
+                },
+                .map_notify => |msg| {
+                    std.log.info("map_notify: {}", .{msg});
+                },
+                .unmap_notify => |msg| {
+                    std.log.info("unmap_notify: {}", .{msg});
+                },
+                .reparent_notify => |msg| {
+                    std.log.info("reparent_notify: {}", .{msg});
+                },
+                .configure_notify => |msg| {
+                    std.log.info("configure_notify: {}", .{msg});
+                },
+                .gravity_notify => |msg| {
+                    std.log.info("gravity_notify: {}", .{msg});
+                },
+                .circulate_notify => |msg| {
+                    std.log.info("circulate_notify: {}", .{msg});
+                },
+                else => |msg| {
+                    // did not register for these
+                    std.log.info("unexpected event: {}", .{msg});
+                    return error.UnexpectedEvent;
+                },
+            }
+        }
     }
-    {
-        var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-        x.poly_fill_rectangle.serialize(&msg, .{
-            .drawable_id = ids.overlay_window_id,
-            .gc_id = ids.overlay_gc,
-        }, &[_]x.Rectangle{
-            .{ .x = 10, .y = 10, .width = 200, .height = 200 },
-        });
-        try conn.send(&msg);
-    }
-
-    // while (true) {
-    //     {
-    //         const receive_buffer = buffer.nextReadBuffer();
-    //         if (receive_buffer.len == 0) {
-    //             std.log.err("buffer size {} not big enough!", .{buffer.half_len});
-    //             return error.BufferSizeNotBigEnough;
-    //         }
-    //         const len = try x.readSock(conn.sock, receive_buffer, 0);
-    //         if (len == 0) {
-    //             std.log.info("X server connection closed", .{});
-    //             return;
-    //         }
-    //         buffer.reserve(len);
-    //     }
-
-    //     while (true) {
-    //         const data = buffer.nextReservedBuffer();
-    //         if (data.len < 32)
-    //             break;
-    //         const msg_len = x.parseMsgLen(data[0..32].*);
-    //         if (data.len < msg_len)
-    //             break;
-    //         buffer.release(msg_len);
-
-    //         //buf.resetIfEmpty();
-    //         switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
-    //             .err => |msg| {
-    //                 std.log.err("Received X error: {}", .{msg});
-    //                 return error.ReceivedXError;
-    //             },
-    //             else => |msg| {
-    //                 // did not register for these
-    //                 std.log.info("unexpected event: {}", .{msg});
-    //                 return error.UnexpectedEvent;
-    //             },
-    //         }
-    //     }
-    // }
 
     // TODO: Remove
     // Keep the process running indefinitely

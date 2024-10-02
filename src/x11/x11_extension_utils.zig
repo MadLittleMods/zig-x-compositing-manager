@@ -15,8 +15,9 @@ pub const ExtensionInfo = struct {
 };
 
 const AvailableExtensions = enum {
+    composite,
+    shape,
     render,
-    input,
 };
 
 /// A map of X server extension names to their info.

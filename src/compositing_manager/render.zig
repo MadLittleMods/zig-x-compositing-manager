@@ -95,7 +95,9 @@ pub fn createResources(
         try common.send(sock, &message_buffer);
     }
 
-    // Now, we create our own window with the overlay as it's parent but 32-bit color.
+    // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
+    // going to create our own window with 32-bit depth with the same dimensions as
+    // overlay/root with the `overlay_window_id` as the parent.
     {
         std.log.debug("Creating window_id {0} 0x{0x}", .{ids.window});
 
@@ -234,37 +236,25 @@ pub fn cleanupResources(
 pub const RenderContext = struct {
     sock: *const std.os.socket_t,
     ids: *const Ids,
-    font_dims: *const FontDims,
+    extensions: *const x11_extension_utils.Extensions(&.{ .composite, .shape, .render }),
     state: *const AppState,
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
         const sock = self.sock.*;
 
-        const current_timestamp_ms = std.time.milliTimestamp();
-        const elapsed_ms = current_timestamp_ms - self.state.start_timestamp_ms;
-
-        // Render some text to the center of the window
-        //
-        // It would be nice if we could use `font-variant-numeric: tabular-nums;` (from
-        // CSS) to make the numbers not jiggle as much when they change. We could also
-        // use a monospace font as a cheap way out.
-        try render_utils.renderString(
-            sock,
-            self.ids.window,
-            self.ids.fg_gc,
-            self.font_dims,
-            @divFloor(self.state.window_dimensions.width, 2),
-            @divFloor(self.state.window_dimensions.height, 2),
-            render_utils.PositionOrigin.init(.{ .keyword = .center }, .{ .keyword = .center }),
-            // To stop things from jiggling around, just pad this number with spaces.
-            // This strategy is flawed as it will start jiggling once enough time has
-            // elapsed (1 hour) and what we really want is to be able to do is specify
-            // the ms precision/padding that we want.
-            "Elapsed time: {s:<10}",
-            .{
-                std.fmt.fmtDurationSigned(std.time.ns_per_ms * elapsed_ms),
-            },
-        );
+        for (self.state.windows.items) |window| {
+            // Draw a big blue square in the middle of the window
+            {
+                var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
+                x.poly_fill_rectangle.serialize(&msg, .{
+                    .drawable_id = self.ids.window,
+                    .gc_id = self.ids.bg_gc,
+                }, &[_]x.Rectangle{
+                    .{ .x = window.x, .y = window.y, .width = window.width, .height = window.height },
+                });
+                try common.send(sock, &msg);
+            }
+        }
     }
 };
