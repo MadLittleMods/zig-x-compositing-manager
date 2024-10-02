@@ -12,6 +12,7 @@ pub const Ids = struct {
 
     /// The drawable ID of the root window
     root: u32,
+    overlay_window_id: u32,
     /// The base resource ID that we can increment from to assign and designate to new
     /// resources.
     base_resource_id: u32,
@@ -25,10 +26,13 @@ pub const Ids = struct {
     bg_gc: u32 = 0,
     /// Foreground graphics context
     fg_gc: u32 = 0,
+    /// Graphics context for the overlay window
+    overlay_gc: u32 = 0,
 
-    pub fn init(root: u32, base_resource_id: u32) Self {
+    pub fn init(root: u32, overlay_window_id: u32, base_resource_id: u32) Self {
         var ids = Ids{
             .root = root,
+            .overlay_window_id = overlay_window_id,
             .base_resource_id = base_resource_id,
             ._current_id = base_resource_id,
         };
@@ -66,10 +70,6 @@ pub fn createResources(
     // const reader = common.SocketReader{ .context = sock };
     // const buffer_limit = buffer.half_len;
 
-    const window_position = state.window_position;
-    const window_dimensions = state.window_dimensions;
-    const window_background_color = state.window_background_color;
-
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_allocator.deinit();
     const allocator = arena_allocator.allocator();
@@ -94,21 +94,24 @@ pub fn createResources(
         });
         try common.send(sock, &message_buffer);
     }
+
+    // Now, we create our own window with the overlay as it's parent but 32-bit color.
     {
         std.log.debug("Creating window_id {0} 0x{0x}", .{ids.window});
 
         var message_buffer: [x.create_window.max_len]u8 = undefined;
         const len = x.create_window.serialize(&message_buffer, .{
             .window_id = ids.window,
-            .parent_window_id = ids.root,
+            // Parent our window to the overlay window
+            .parent_window_id = ids.overlay_window_id,
             // Color depth:
             // - 24 for RGB
             // - 32 for ARGB
             .depth = depth,
-            .x = window_position.x,
-            .y = window_position.y,
-            .width = @intCast(window_dimensions.width),
-            .height = @intCast(window_dimensions.height),
+            .x = 0,
+            .y = 0,
+            .width = @intCast(state.root_screen_dimensions.width),
+            .height = @intCast(state.root_screen_dimensions.height),
             // It's unclear what this is for, but we just need to set it to something
             // since it's one of the arguments.
             .border_width = 0,
@@ -118,7 +121,7 @@ pub fn createResources(
             .bg_pixmap = .none,
             // 0xAARRGGBB
             // Required when `depth` is set to 32
-            .bg_pixel = window_background_color,
+            .bg_pixel = 0xff00ff00,
             // .border_pixmap =
             // Required when `depth` is set to 32
             .border_pixel = 0x00000000,
@@ -173,6 +176,27 @@ pub fn createResources(
         }, .{
             .background = color_black,
             .foreground = color_yellow,
+            // This option will prevent `NoExposure` events when we send `CopyArea`.
+            // We're no longer using `CopyArea` in favor of X Render `Composite` though
+            // so this isn't of much use. Still seems applicable to keep around in the
+            // spirit of what we want to do.
+            .graphics_exposures = false,
+        });
+        try common.send(sock, message_buffer[0..len]);
+    }
+
+    {
+        const color_black: u32 = 0xff000000;
+        const color_red: u32 = 0xffff0000;
+
+        std.log.info("foreground_graphics_context_id {0} 0x{0x}", .{ids.fg_gc});
+        var message_buffer: [x.create_gc.max_len]u8 = undefined;
+        const len = x.create_gc.serialize(&message_buffer, .{
+            .gc_id = ids.overlay_gc,
+            .drawable_id = ids.overlay_window_id,
+        }, .{
+            .background = color_black,
+            .foreground = color_red,
             // This option will prevent `NoExposure` events when we send `CopyArea`.
             // We're no longer using `CopyArea` in favor of X Render `Composite` though
             // so this isn't of much use. Still seems applicable to keep around in the

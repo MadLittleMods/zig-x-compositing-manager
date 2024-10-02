@@ -5,6 +5,8 @@ const render = @import("compositing_manager/render.zig");
 const AppState = @import("compositing_manager/app_state.zig").AppState;
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_composite_extension = @import("x11/x_composite_extension.zig");
+const x_shape_extension = @import("x11/x_shape_extension.zig");
+const render_utils = @import("utils/render_utils.zig");
 
 // In order to create the total screen presentation we need to create a render picture
 // for the root window (or "composite overlay window" if available), and draw the
@@ -40,11 +42,6 @@ pub fn main() !void {
     }
 
     std.log.info("root window ID {0} 0x{0x}", .{screen.root});
-    const ids = render.Ids.init(
-        screen.root,
-        conn.setup.fixed().resource_id_base,
-    );
-    std.log.debug("ids: {any}", .{ids});
 
     // Create a big buffer that we can use to read messages and replies from the X server.
     const double_buffer = try x.DoubleBuffer.init(
@@ -54,7 +51,7 @@ pub fn main() !void {
     defer double_buffer.deinit(); // not necessary but good to test
     std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
     var buffer = double_buffer.contiguousReadBuffer();
-    // const buffer_limit = buffer.half_len;
+    const buffer_limit = buffer.half_len;
 
     // We use the X Composite extension to redirect the rendering of the windows to offscreen storage.
     const optional_composite_extension = try x11_extension_utils.getExtensionInfo(
@@ -76,15 +73,209 @@ pub fn main() !void {
         },
     );
 
+    // We use the X Shape extension to make the debug window click-through-able. If
+    // you're familiar with CSS, we use this to apply `pointer-events: none;`.
+    const optional_shape_extension = try x11_extension_utils.getExtensionInfo(
+        conn.sock,
+        &buffer,
+        "SHAPE",
+    );
+    const shape_extension = optional_shape_extension orelse @panic("X SHAPE extension not found");
+
+    try x_shape_extension.ensureCompatibleVersionOfXShapeExtension(
+        conn.sock,
+        &buffer,
+        &shape_extension,
+        .{
+            // We arbitrarily require version 1.1 of the X Shape extension
+            // because that's the latest version and is sufficiently old
+            // and ubiquitous.
+            .major_version = 1,
+            .minor_version = 1,
+        },
+    );
+
+    // Redirect all of the subwindows of the root window to offscreen storage.
     {
         var message_buffer: [x.composite.redirect_subwindows.len]u8 = undefined;
         x.composite.redirect_subwindows.serialize(&message_buffer, composite_extension.opcode, .{
-            .window_id = ids.root,
+            .window_id = screen.root,
             .update_type = .manual,
         });
         try conn.send(&message_buffer);
     }
 
+    // Get the overlay window that we can draw on
+    {
+        var message_buffer: [x.composite.get_overlay_window.len]u8 = undefined;
+        x.composite.get_overlay_window.serialize(&message_buffer, composite_extension.opcode, .{
+            .window_id = screen.root,
+        });
+        try conn.send(&message_buffer);
+    }
+    const overlay_window_id = blk: {
+        const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+        try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+            .reply => |msg_reply| {
+                const msg: *x.composite.get_overlay_window.Reply = @ptrCast(msg_reply);
+                break :blk msg.overlay_window_id;
+            },
+            else => |msg| {
+                std.log.err("expected a reply for `x.composite.get_overlay_window` but got {}", .{msg});
+                return error.ExpectedReplyForGetOverlayWindow;
+            },
+        }
+    };
+
+    const ids = render.Ids.init(
+        screen.root,
+        overlay_window_id,
+        conn.setup.fixed().resource_id_base,
+    );
+    std.log.debug("ids: {any}", .{ids});
+
+    // 32-bit depth so we can use ARGB colors (alpha/transparency)
+    const depth = 32;
+
+    const root_screen_dimensions = render_utils.Dimensions{
+        .width = @intCast(screen.pixel_width),
+        .height = @intCast(screen.pixel_height),
+    };
+
+    const state = AppState{
+        .root_screen_dimensions = root_screen_dimensions,
+    };
+
+    try render.createResources(
+        conn.sock,
+        &buffer,
+        &ids,
+        screen,
+        depth,
+        &state,
+    );
+
+    // Make the overlay window click-through-able. If you're familiar with CSS, we use
+    // this to apply `pointer-events: none;`.
+    //
+    // We want the pointer events to go through the overlay window and pass to the
+    // underlying windows.
+    {
+        const rectangle_list = [_]x.Rectangle{
+            .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+        };
+        var msg: [x.shape.rectangles.getLen(rectangle_list.len)]u8 = undefined;
+        x.shape.rectangles.serialize(&msg, shape_extension.opcode, .{
+            .destination_window_id = overlay_window_id,
+            .destination_kind = .input,
+            .operation = .set,
+            .x_offset = 0,
+            .y_offset = 0,
+            .ordering = .unsorted,
+            .rectangles = &rectangle_list,
+        });
+        try conn.send(&msg);
+    }
+    // Also do this to our own 32-bit depth overlay window
+    {
+        const rectangle_list = [_]x.Rectangle{
+            .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+        };
+        var msg: [x.shape.rectangles.getLen(rectangle_list.len)]u8 = undefined;
+        x.shape.rectangles.serialize(&msg, shape_extension.opcode, .{
+            .destination_window_id = ids.window,
+            .destination_kind = .input,
+            .operation = .set,
+            .x_offset = 0,
+            .y_offset = 0,
+            .ordering = .unsorted,
+            .rectangles = &rectangle_list,
+        });
+        try conn.send(&msg);
+    }
+
+    // Draw a big blue square in the middle of the window
+    {
+        var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
+        x.poly_fill_rectangle.serialize(&msg, .{
+            .drawable_id = ids.window,
+            .gc_id = ids.bg_gc,
+        }, &[_]x.Rectangle{
+            .{ .x = 100, .y = 100, .width = 200, .height = 200 },
+        });
+        try conn.send(&msg);
+    }
+    {
+        var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
+        x.poly_fill_rectangle.serialize(&msg, .{
+            .drawable_id = ids.overlay_window_id,
+            .gc_id = ids.overlay_gc,
+        }, &[_]x.Rectangle{
+            .{ .x = 10, .y = 10, .width = 200, .height = 200 },
+        });
+        try conn.send(&msg);
+    }
+
+    // We want to know when a window is created/destroyed, moved, resized, show/hide,
+    // stacking order change, so we can reflect the change.
+    {
+        var message_buffer: [x.change_window_attributes.max_len]u8 = undefined;
+        const len = x.change_window_attributes.serialize(&message_buffer, ids.root, .{
+            .event_mask = x.event.substructure_redirect, //| x.event.substructure_notify,
+        });
+        try conn.send(message_buffer[0..len]);
+    }
+
+    // Show the window. In the X11 protocol is called mapping a window, and hiding a
+    // window is called unmapping. When windows are initially created, they are unmapped
+    // (or hidden).
+    {
+        var msg: [x.map_window.len]u8 = undefined;
+        x.map_window.serialize(&msg, ids.window);
+        try conn.send(&msg);
+    }
+
+    // while (true) {
+    //     {
+    //         const receive_buffer = buffer.nextReadBuffer();
+    //         if (receive_buffer.len == 0) {
+    //             std.log.err("buffer size {} not big enough!", .{buffer.half_len});
+    //             return error.BufferSizeNotBigEnough;
+    //         }
+    //         const len = try x.readSock(conn.sock, receive_buffer, 0);
+    //         if (len == 0) {
+    //             std.log.info("X server connection closed", .{});
+    //             return;
+    //         }
+    //         buffer.reserve(len);
+    //     }
+
+    //     while (true) {
+    //         const data = buffer.nextReservedBuffer();
+    //         if (data.len < 32)
+    //             break;
+    //         const msg_len = x.parseMsgLen(data[0..32].*);
+    //         if (data.len < msg_len)
+    //             break;
+    //         buffer.release(msg_len);
+
+    //         //buf.resetIfEmpty();
+    //         switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
+    //             .err => |msg| {
+    //                 std.log.err("Received X error: {}", .{msg});
+    //                 return error.ReceivedXError;
+    //             },
+    //             else => |msg| {
+    //                 // did not register for these
+    //                 std.log.info("unexpected event: {}", .{msg});
+    //                 return error.UnexpectedEvent;
+    //             },
+    //         }
+    //     }
+    // }
+
+    // TODO: Remove
     // Keep the process running indefinitely
     while (true) {
         std.time.sleep(60 * std.time.ns_per_s);
@@ -127,9 +318,11 @@ test "end-to-end" {
         var main_process = std.ChildProcess.init(&main_argv, allocator);
         // Prevent writing to `stdout` so the test runner doesn't hang,
         // see https://github.com/ziglang/zig/issues/15091
-        main_process.stdin_behavior = .Ignore;
-        main_process.stdout_behavior = .Ignore;
-        main_process.stderr_behavior = .Ignore;
+        //
+        // TODO: Uncomment and make it so we log the output if the test fails
+        // main_process.stdin_behavior = .Ignore;
+        // main_process.stdout_behavior = .Ignore;
+        // main_process.stderr_behavior = .Ignore;
 
         // Start the compositing manager process.
         try main_process.spawn();

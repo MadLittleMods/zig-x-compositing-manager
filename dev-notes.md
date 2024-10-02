@@ -30,6 +30,7 @@ Compositing manager examples:
     - `xcompmgr` is a sample compositing manager for X servers supporting the `XFIXES`, `DAMAGE`, `RENDER`, and `COMPOSITE` extensions.  It enables basic eye-candy effects.
  - https://github.com/gustavosbarreto/compmgr
  - https://projects.mini-dweeb.org/projects/unagi
+ - [`LamaAni/WebMachine` -> `Testing/cwm.js`](https://github.com/LamaAni/WebMachine/blob/033a0ccafc658a65d8f8f95776113be6681f5edf/Testing/cwm.js
 
 Other window manager examples:
 
@@ -44,6 +45,7 @@ Other window manager examples:
    - https://github.com/last-arg/buoy
    - Tiling window manager: https://github.com/chip2n/zwm
    - https://github.com/Polymethylmethacrylat/m349wm
+ - https://github.com/jichu4n/basic_wm
  - https://github.com/mackstann/tinywm
  - https://github.com/Airblader/node-tinywm
  - [https://github.com/sidorares/node-x11/examples/windowmanager/wm.js](https://github.com/sidorares/node-x11/blob/070877bd71276b69f973f487d20969743ed3ec6d/examples/windowmanager/wm.js)
