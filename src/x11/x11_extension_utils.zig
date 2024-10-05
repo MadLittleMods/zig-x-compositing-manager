@@ -35,16 +35,14 @@ pub fn getExtensionInfo(
     x_connection: common.XConnection,
     comptime extension_name: []const u8,
 ) !?ExtensionInfo {
-    const reader = common.SocketReader{ .context = x_connection.socket };
-
     {
         const ext_name = comptime x.Slice(u16, [*]const u8).initComptime(extension_name);
         var message_buffer: [x.query_extension.getLen(ext_name.len)]u8 = undefined;
         x.query_extension.serialize(&message_buffer, ext_name);
         try common.send(x_connection.socket, &message_buffer);
     }
-    const message_length = try x.readOneMsg(reader, @alignCast(x_connection.buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer_limit);
+    const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);
     const optional_render_extension = blk: {
         switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {

@@ -50,6 +50,7 @@ pub fn main() !void {
     const x_event_connection = try common.XConnection.init(
         x_event_connect_result.sock,
         1000,
+        allocator,
     );
     defer x_event_connection.deinit();
     // 2. Create an X connection for making one-off requests
@@ -57,7 +58,8 @@ pub fn main() !void {
     defer x_request_connect_result.setup.deinit(allocator);
     const x_request_connection = try common.XConnection.init(
         x_request_connect_result.sock,
-        1000,
+        8000,
+        allocator,
     );
     defer x_request_connection.deinit();
 
@@ -75,16 +77,6 @@ pub fn main() !void {
         std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
     }
     std.log.info("root window ID {0} 0x{0x}", .{screen.root});
-
-    // Create a big buffer that we can use to read events and replies from the X server.
-    const double_buffer = try x.DoubleBuffer.init(
-        std.mem.alignForward(usize, 1000, std.mem.page_size),
-        .{ .memfd_name = "ZigX11DoubleBuffer" },
-    );
-    defer double_buffer.deinit(); // not necessary but good to test
-    std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
-    var buffer = double_buffer.contiguousReadBuffer();
-    const buffer_limit = buffer.half_len;
 
     // We use the X Composite extension to redirect the rendering of the windows to offscreen storage.
     const optional_composite_extension = try x11_extension_utils.getExtensionInfo(
@@ -172,7 +164,7 @@ pub fn main() !void {
             // window ourselves taking alpha/transparency into account.
             .update_type = .manual,
         });
-        try x_event_connect_result.send(&message_buffer);
+        try x_request_connection.send(&message_buffer);
     }
 
     // Get the overlay window that we can draw on without interference. This window is
@@ -186,12 +178,21 @@ pub fn main() !void {
         x.composite.get_overlay_window.serialize(&message_buffer, composite_extension.opcode, .{
             .window_id = screen.root,
         });
-        try x_event_connect_result.send(&message_buffer);
+        try x_request_connection.send(&message_buffer);
     }
     const overlay_window_id = blk: {
-        const message_length = try x.readOneMsg(x_event_connect_result.reader(), @alignCast(buffer.nextReadBuffer()));
-        try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+        const message_length = try x.readOneMsg(
+            x_request_connection.reader(),
+            @alignCast(x_request_connection.buffer.nextReadBuffer()),
+        );
+        // const msg = try common.asReply(
+        //     x.composite.get_overlay_window.Reply,
+        //     @alignCast(x_request_connection.buffer.double_buffer_ptr[0..message_length]),
+        // );
+        // break :blk msg.overlay_window_id;
+
+        try common.checkMessageLengthFitsInBuffer(message_length, x_request_connection.buffer.half_len);
+        switch (x.serverMsgTaggedUnion(@alignCast(x_request_connection.buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.composite.get_overlay_window.Reply = @ptrCast(msg_reply);
                 break :blk msg.overlay_window_id;
@@ -231,8 +232,9 @@ pub fn main() !void {
     // going to create our own window with 32-bit depth with the same dimensions as
     // overlay/root with the `overlay_window_id` as the parent.
     try render.createResources(
-        x_event_connect_result.sock,
-        &buffer,
+        // TODO: refactor
+        x_event_connection.socket,
+        x_event_connection.buffer,
         &ids,
         screen,
         &extensions,
@@ -320,9 +322,9 @@ pub fn main() !void {
 
     while (true) {
         {
-            const receive_buffer = buffer.nextReadBuffer();
+            const receive_buffer = x_event_connection.buffer.nextReadBuffer();
             if (receive_buffer.len == 0) {
-                std.log.err("buffer size {} not big enough!", .{buffer.half_len});
+                std.log.err("buffer size {} not big enough!", .{x_event_connection.buffer.half_len});
                 return error.BufferSizeNotBigEnough;
             }
             const len = try x.readSock(x_event_connect_result.sock, receive_buffer, 0);
@@ -330,17 +332,17 @@ pub fn main() !void {
                 std.log.info("X server connection closed", .{});
                 return;
             }
-            buffer.reserve(len);
+            x_event_connection.buffer.reserve(len);
         }
 
         while (true) {
-            const data = buffer.nextReservedBuffer();
+            const data = x_event_connection.buffer.nextReservedBuffer();
             if (data.len < 32)
                 break;
             const msg_len = x.parseMsgLen(data[0..32].*);
             if (data.len < msg_len)
                 break;
-            buffer.release(msg_len);
+            x_event_connection.buffer.release(msg_len);
 
             //buf.resetIfEmpty();
             switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
@@ -382,7 +384,7 @@ pub fn main() !void {
                     const window_picture_id = ids.generateMonotonicId();
                     try x_render_extension.createPictureForWindow(
                         x_event_connect_result.sock,
-                        &buffer,
+                        x_event_connection.buffer,
                         window_picture_id,
                         msg.window,
                         &x11_extension_utils.Extensions(&.{.render}){

@@ -21,6 +21,8 @@ pub fn send(sock: std.os.socket_t, data: []const u8) !void {
 pub const ConnectResult = struct {
     sock: std.os.socket_t,
     setup: x.ConnectSetup,
+
+    // TODO: Remove since these have been moved to the XConnection struct
     pub fn reader(self: ConnectResult) SocketReader {
         return .{ .context = self.sock };
     }
@@ -32,35 +34,44 @@ pub const ConnectResult = struct {
 pub const XConnection = struct {
     /// Connection to the X server.
     socket: std.os.socket_t,
-    double_buffer: *const x.DoubleBuffer,
+    double_buffer: x.DoubleBuffer,
     buffer: *x.ContiguousReadBuffer,
-    buffer_limit: usize,
+    allocator: std.mem.Allocator,
 
     pub fn init(
         socket: std.os.socket_t,
         /// Good rule of thumb is 1000 for events or 10000 for replies (for example, the
         /// reply for `x.render.query_pict_formats` is 4888 bytes on my system)
         buffer_size: usize,
+        allocator: std.mem.Allocator,
     ) !@This() {
         // Create a big buffer that we can use to read events and replies from the X server.
         const double_buffer = try x.DoubleBuffer.init(
             std.mem.alignForward(usize, buffer_size, std.mem.page_size),
             .{ .memfd_name = "ZigX11DoubleBuffer" },
         );
-        var buffer = double_buffer.contiguousReadBuffer();
-        const buffer_limit = buffer.half_len;
+        var buffer = try allocator.create(x.ContiguousReadBuffer);
+        buffer.* = double_buffer.contiguousReadBuffer();
 
         return .{
             .socket = socket,
-            .double_buffer = &double_buffer,
-            .buffer = &buffer,
-            .buffer_limit = buffer_limit,
+            .double_buffer = double_buffer,
+            .buffer = buffer,
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *const XConnection) void {
         self.double_buffer.deinit(); // not necessary but good to test
+        self.allocator.destroy(self.buffer);
         std.os.shutdown(self.socket, .both) catch {};
+    }
+
+    pub fn reader(self: @This()) SocketReader {
+        return .{ .context = self.socket };
+    }
+    pub fn send(self: @This(), data: []const u8) !void {
+        try common.send(self.socket, data);
     }
 };
 
@@ -218,8 +229,8 @@ pub fn connect(allocator: std.mem.Allocator) !ConnectResult {
 pub fn asReply(comptime T: type, msg_bytes: []align(4) u8) !*T {
     const generic_msg: *x.ServerMsg.Generic = @ptrCast(msg_bytes.ptr);
     if (generic_msg.kind != .reply) {
-        std.log.err("expected reply but got {}", .{generic_msg});
-        return error.UnexpectedReply;
+        std.log.err("expected reply of type {s} but got {}", .{ @typeName(T), generic_msg });
+        return error.ExpectedReply;
     }
     return @alignCast(@ptrCast(generic_msg));
 }

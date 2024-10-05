@@ -20,8 +20,6 @@ pub fn ensureCompatibleVersionOfXRenderExtension(
         minor_version: u32,
     },
 ) !void {
-    const reader = common.SocketReader{ .context = x_connection.socket };
-
     {
         var message_buffer: [x.render.query_version.len]u8 = undefined;
         x.render.query_version.serialize(&message_buffer, render_extension.opcode, .{
@@ -30,8 +28,8 @@ pub fn ensureCompatibleVersionOfXRenderExtension(
         });
         try common.send(x_connection.socket, &message_buffer);
     }
-    const message_length = try x.readOneMsg(reader, @alignCast(x_connection.buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer_limit);
+    const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);
     switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
         .reply => |msg_reply| {
             const msg: *x.render.query_version.Reply = @ptrCast(msg_reply);

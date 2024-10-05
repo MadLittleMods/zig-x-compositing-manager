@@ -18,15 +18,13 @@ pub fn ensureCompatibleVersionOfXShapeExtension(
         minor_version: u16,
     },
 ) !void {
-    const reader = common.SocketReader{ .context = x_connection.socket };
-
     {
         var message_buffer: [x.shape.query_version.len]u8 = undefined;
         x.shape.query_version.serialize(&message_buffer, shape_extension.opcode);
         try common.send(x_connection.socket, &message_buffer);
     }
-    const message_length = try x.readOneMsg(reader, @alignCast(x_connection.buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer_limit);
+    const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);
     switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
         .reply => |msg_reply| {
             const msg: *x.shape.query_version.Reply = @ptrCast(msg_reply);
