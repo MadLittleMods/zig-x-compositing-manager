@@ -207,6 +207,8 @@ pub fn main() !void {
     var ids = render.Ids.init(
         screen.root,
         overlay_window_id,
+        // Use the event connection's resource ID base for the window ID base because we
+        // create everything with the event connection in order to subscribe to events.
         x_event_connect_result.setup.fixed().resource_id_base,
     );
     std.log.debug("ids: {any}", .{ids});
@@ -356,9 +358,14 @@ pub fn main() !void {
                     std.log.err("Received X error: {}", .{msg});
                     return error.ReceivedXError;
                 },
-                // When our 32-bit overlay window is mapped/shown
+                .reply => |msg| {
+                    // We should only receive replies over the `x_request_connection`
+                    std.log.info("Unexpectedly received reply over the `x_event_connection`: {}", .{msg});
+                    return error.UnexpectedXReplyOverEventLoopConnection;
+                },
                 .expose => |msg| {
                     std.log.info("expose: {}", .{msg});
+                    // Render when our 32-bit overlay window is mapped/shown
                     try render_context.render();
                 },
                 .create_notify => |msg| {
@@ -398,22 +405,47 @@ pub fn main() !void {
                     );
                     try state.window_to_picture_id_map.put(msg.window, window_picture_id);
 
+                    // Render after a new window is shown
                     try render_context.render();
                 },
                 .unmap_notify => |msg| {
                     std.log.info("unmap_notify: {}", .{msg});
+
+                    // Render after a window is hidden
+                    try render_context.render();
                 },
                 .reparent_notify => |msg| {
-                    std.log.info("reparent_notify: {}", .{msg});
+                    std.log.info("TODO: reparent_notify: {}", .{msg});
                 },
                 .configure_notify => |msg| {
                     std.log.info("configure_notify: {}", .{msg});
+
+                    // TODO: Take `msg.above_sibling` into account
+
+                    // We expect an entry to already be in the `window_map` because we
+                    // should have received a `create_notify` event before this.
+                    const existing_window_entry = state.window_map.get(msg.window_id) orelse return error.ConfigureNotifyWindowNotFound;
+
+                    try state.window_map.put(msg.window_id, .{
+                        .window_id = msg.window_id,
+                        .visible = existing_window_entry.visible,
+                        .x = msg.x,
+                        .y = msg.y,
+                        .width = msg.width,
+                        .height = msg.height,
+                    });
+
+                    // Render after the window changes position or size
+                    try render_context.render();
                 },
                 .gravity_notify => |msg| {
                     std.log.info("gravity_notify: {}", .{msg});
+
+                    // Render after a window is moved because the parent changed size
+                    try render_context.render();
                 },
                 .circulate_notify => |msg| {
-                    std.log.info("circulate_notify: {}", .{msg});
+                    std.log.info("TODO: circulate_notify: {}", .{msg});
                 },
                 else => |msg| {
                     // did not register for these
@@ -422,12 +454,6 @@ pub fn main() !void {
                 },
             }
         }
-    }
-
-    // TODO: Remove
-    // Keep the process running indefinitely
-    while (true) {
-        std.time.sleep(60 * std.time.ns_per_s);
     }
 }
 
