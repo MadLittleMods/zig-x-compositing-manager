@@ -25,7 +25,8 @@ Other window manager articles:
 Other articles:
 
  - Basic Graphics Programming With The XCB Library: https://www.x.org/releases/X11R7.6/doc/libxcb/tutorial/index.html
-
+ - Exploring Xorg connections (part 1): https://hereket.com/posts/exploring-xorg-connections/
+ - Monitoring Raw X11 Communication or why Chromium opens 7 Xorg connections (part 2): https://hereket.com/posts/monitoring-raw-x11-communication/
 
 Compositing manager examples:
 

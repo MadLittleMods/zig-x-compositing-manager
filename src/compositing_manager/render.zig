@@ -7,19 +7,35 @@ const AppState = @import("app_state.zig").AppState;
 const render_utils = @import("../utils/render_utils.zig");
 const FontDims = render_utils.FontDims;
 
-/// Stores the IDs of the all of the resources used when communicating with the X Window server.
-pub const Ids = struct {
-    const Self = @This();
-
-    /// The drawable ID of the root window
-    root: u32,
-    /// The drawable ID of the composite overlay window
-    overlay_window_id: u32,
+/// Generate new resource IDs for X resources.
+pub const IdGenerator = struct {
     /// The base resource ID that we can increment from to assign and designate to new
     /// resources.
     base_resource_id: u32,
     /// (not for external use) - Tracks the current incremented ID
     _current_id: u32,
+
+    pub fn init(base_resource_id: u32) @This() {
+        return .{
+            .base_resource_id = base_resource_id,
+            ._current_id = base_resource_id,
+        };
+    }
+
+    /// Returns an ever-increasing ID everytime the function is called
+    pub fn generateMonotonicId(self: *@This()) u32 {
+        const current_id = self._current_id;
+        self._current_id += 1;
+        return current_id;
+    }
+};
+
+/// Stores the IDs of the all of the resources used when communicating with the X Window server.
+pub const Ids = struct {
+    /// The drawable ID of the root window
+    root: u32,
+    /// The drawable ID of the composite overlay window
+    overlay_window_id: u32,
 
     /// The drawable ID of our window
     window: u32 = 0,
@@ -36,31 +52,24 @@ pub const Ids = struct {
     // extension.
     picture_window: u32 = 0,
 
-    pub fn init(root: u32, overlay_window_id: u32, base_resource_id: u32) Self {
+    pub fn init(root: u32, overlay_window_id: u32, base_resource_id: u32) @This() {
         var ids = Ids{
             .root = root,
             .overlay_window_id = overlay_window_id,
-            .base_resource_id = base_resource_id,
-            ._current_id = base_resource_id,
         };
+
+        var id_generator = IdGenerator.init(base_resource_id);
 
         // For any ID that isn't set yet (still has the default value of 0), generate
         // a new ID. This is a lot more fool-proof than trying to set the IDs manually
         // for each new one added.
         inline for (std.meta.fields(@TypeOf(ids))) |field| {
             if (@field(ids, field.name) == 0) {
-                @field(ids, field.name) = ids.generateMonotonicId();
+                @field(ids, field.name) = id_generator.generateMonotonicId();
             }
         }
 
         return ids;
-    }
-
-    /// Returns an ever-increasing ID everytime the function is called
-    pub fn generateMonotonicId(self: *Ids) u32 {
-        const current_id = self._current_id;
-        self._current_id += 1;
-        return current_id;
     }
 };
 
@@ -271,36 +280,35 @@ pub const RenderContext = struct {
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
-        _ = self;
-        // const sock = self.sock.*;
+        const sock = self.sock.*;
 
-        // var window_map_iterator = self.state.window_map.iterator();
-        // while (window_map_iterator.next()) |window_entry| {
-        //     const window_id = window_entry.key_ptr.*;
-        //     const window = window_entry.value_ptr;
+        var window_map_iterator = self.state.window_map.iterator();
+        while (window_map_iterator.next()) |window_entry| {
+            const window_id = window_entry.key_ptr.*;
+            const window = window_entry.value_ptr;
 
-        //     const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
-        //     if (opt_picture_id) |picture_id| {
-        //         var msg: [x.render.composite.len]u8 = undefined;
-        //         x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
-        //             .picture_operation = .over,
-        //             .src_picture_id = picture_id,
-        //             .mask_picture_id = 0,
-        //             .dst_picture_id = self.ids.picture_window,
-        //             .src_x = 0,
-        //             .src_y = 0,
-        //             .mask_x = 0,
-        //             .mask_y = 0,
-        //             .dst_x = window.x,
-        //             .dst_y = window.y,
-        //             .width = window.width,
-        //             .height = window.height,
-        //         });
-        //         try common.send(sock, &msg);
-        //     } else {
-        //         std.log.err("No picture ID found for window_id {}", .{window_id});
-        //         continue;
-        //     }
-        // }
+            const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
+            if (opt_picture_id) |picture_id| {
+                var msg: [x.render.composite.len]u8 = undefined;
+                x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
+                    .picture_operation = .over,
+                    .src_picture_id = picture_id,
+                    .mask_picture_id = 0,
+                    .dst_picture_id = self.ids.picture_window,
+                    .src_x = 0,
+                    .src_y = 0,
+                    .mask_x = 0,
+                    .mask_y = 0,
+                    .dst_x = window.x,
+                    .dst_y = window.y,
+                    .width = window.width,
+                    .height = window.height,
+                });
+                try common.send(sock, &msg);
+            } else {
+                std.log.err("No picture ID found for window_id {}", .{window_id});
+                continue;
+            }
+        }
     }
 };

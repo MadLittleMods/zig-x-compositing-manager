@@ -210,6 +210,9 @@ pub fn main() !void {
         x_event_connect_result.setup.fixed().resource_id_base,
     );
     std.log.debug("ids: {any}", .{ids});
+    var request_id_generator = render.IdGenerator.init(
+        x_request_connect_result.setup.fixed().resource_id_base,
+    );
 
     // We're using 32-bit depth so we can use ARGB colors that include alpha/transparency
     const depth = 32;
@@ -384,7 +387,7 @@ pub fn main() !void {
                     // be reinvoked for the client to continue to refer to the storage
                     // holding the current window contents
 
-                    const window_picture_id = ids.generateMonotonicId();
+                    const window_picture_id = request_id_generator.generateMonotonicId();
                     try x_render_extension.createPictureForWindow(
                         x_request_connection,
                         window_picture_id,
