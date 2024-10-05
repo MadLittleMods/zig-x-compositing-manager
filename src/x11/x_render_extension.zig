@@ -59,26 +59,22 @@ pub fn ensureCompatibleVersionOfXRenderExtension(
 }
 
 pub fn findPictureFormatForVisualId(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     visual_id: u32,
     extensions: *const x11_extension_utils.Extensions(&.{.render}),
 ) !?x.render.PictureFormatInfo {
-    const reader = common.SocketReader{ .context = sock };
-    const buffer_limit = buffer.half_len;
-
     // Find some compatible picture formats for use with the X Render extension. We want
     // to find a 24-bit depth format for use with the root window and a 32-bit depth
     // format for use with our window.
     {
         var message_buffer: [x.render.query_pict_formats.len]u8 = undefined;
         x.render.query_pict_formats.serialize(&message_buffer, extensions.render.opcode);
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
-    const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+    const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);
     const opt_picture_format: ?x.render.PictureFormatInfo = blk: {
-        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+        switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
 
@@ -123,26 +119,22 @@ pub fn findPictureFormatForVisualId(
 /// We need to create a picture for every drawable/window that we want to use with the X Render
 /// extension
 pub fn createPictureForWindow(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     picture_id: u32,
     /// Drawable/window_id
     drawable_id: u32,
     extensions: *const x11_extension_utils.Extensions(&.{.render}),
 ) !void {
-    const reader = common.SocketReader{ .context = sock };
-    const buffer_limit = buffer.half_len;
-
     // Find the `visual_id` for this window
     {
         var msg_buf: [x.get_window_attributes.len]u8 = undefined;
         x.get_window_attributes.serialize(&msg_buf, drawable_id);
-        try common.send(sock, &msg_buf);
+        try x_connection.send(&msg_buf);
     }
     const visual_id = blk: {
-        const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-        try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+        const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
+        try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);
+        switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.get_window_attributes.Reply = @ptrCast(msg_reply);
                 break :blk msg.visual_id;
@@ -156,8 +148,7 @@ pub fn createPictureForWindow(
 
     // Find the picture format that matches the `visual_id` of the window
     const opt_matching_picture_format = try findPictureFormatForVisualId(
-        sock,
-        buffer,
+        x_connection,
         visual_id,
         extensions,
     );
@@ -172,5 +163,5 @@ pub fn createPictureForWindow(
         .format_id = matching_picture_format.picture_format_id,
         .options = .{},
     });
-    try common.send(sock, message_buffer[0..len]);
+    try x_connection.send(message_buffer[0..len]);
 }

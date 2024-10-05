@@ -66,17 +66,13 @@ pub const Ids = struct {
 
 /// Bootstraps all of the X resources we will need use when rendering the UI.
 pub fn createResources(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     ids: *const Ids,
     screen: *align(4) x.Screen,
     extensions: *const x11_extension_utils.Extensions(&.{ .composite, .shape, .render }),
     depth: u8,
     state: *const AppState,
 ) !void {
-    // const reader = common.SocketReader{ .context = sock };
-    // const buffer_limit = buffer.half_len;
-
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_allocator.deinit();
     const allocator = arena_allocator.allocator();
@@ -99,7 +95,7 @@ pub fn createResources(
             .visual_id = matching_visual_type.id,
             .alloc = .none,
         });
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
@@ -150,12 +146,11 @@ pub fn createResources(
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
             // .dont_propagate = 1,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     const opt_matching_picture_format = try x11_render_extension.findPictureFormatForVisualId(
-        sock,
-        buffer,
+        x_connection,
         matching_visual_type.id,
         &x11_extension_utils.Extensions(&.{.render}){
             .render = extensions.render,
@@ -178,7 +173,7 @@ pub fn createResources(
             .format_id = matching_picture_format.picture_format_id,
             .options = .{},
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     {
@@ -199,7 +194,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
     {
         const color_black: u32 = 0xff000000;
@@ -219,7 +214,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     {
@@ -240,7 +235,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 }
 

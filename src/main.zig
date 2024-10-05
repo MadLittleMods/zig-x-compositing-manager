@@ -30,7 +30,7 @@ pub fn main() !void {
     //
     // 1. Event Connection: Used for reading events in the main event loop.
     //    - One exception is that we have to make `x.create_window` or
-    //      `x.configure_window` requests with this connection in order to specify the
+    //      `x.change_window_attributes` requests with this connection in order to specify the
     //      events that we want to subscribe to.
     // 2. Request Connection: Used for making one-shot requests and reading their replies.
     //
@@ -232,9 +232,10 @@ pub fn main() !void {
     // going to create our own window with 32-bit depth with the same dimensions as
     // overlay/root with the `overlay_window_id` as the parent.
     try render.createResources(
-        // TODO: refactor
-        x_event_connection.socket,
-        x_event_connection.buffer,
+        // XXX: We have to use the `x_event_connection` in because this calls
+        // `x.create_window` and configures which events we should listen to in the
+        // `.event_mask`
+        x_event_connection,
         &ids,
         screen,
         &extensions,
@@ -261,7 +262,7 @@ pub fn main() !void {
             .ordering = .unsorted,
             .rectangles = &rectangle_list,
         });
-        try x_event_connect_result.send(&msg);
+        try x_request_connection.send(&msg);
     }
     // Also do this to our own 32-bit depth overlay window
     {
@@ -278,7 +279,7 @@ pub fn main() !void {
             .ordering = .unsorted,
             .rectangles = &rectangle_list,
         });
-        try x_event_connect_result.send(&msg);
+        try x_request_connection.send(&msg);
     }
 
     // We want to know when a window is created/destroyed, moved, resized, show/hide,
@@ -301,7 +302,9 @@ pub fn main() !void {
             //
             // | x.event.substructure_redirect,
         });
-        try x_event_connect_result.send(message_buffer[0..len]);
+        // XXX: We have to use the `x_event_connection` in because we're specifying
+        // which events we should listen to in the `.event_mask`
+        try x_event_connection.send(message_buffer[0..len]);
     }
 
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
@@ -310,11 +313,11 @@ pub fn main() !void {
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
-        try x_event_connect_result.send(&msg);
+        try x_request_connection.send(&msg);
     }
 
     var render_context = render.RenderContext{
-        .sock = &x_event_connect_result.sock,
+        .sock = &x_request_connection.socket,
         .ids = &ids,
         .extensions = &extensions,
         .state = &state,
@@ -383,8 +386,7 @@ pub fn main() !void {
 
                     const window_picture_id = ids.generateMonotonicId();
                     try x_render_extension.createPictureForWindow(
-                        x_event_connect_result.sock,
-                        x_event_connection.buffer,
+                        x_request_connection,
                         window_picture_id,
                         msg.window,
                         &x11_extension_utils.Extensions(&.{.render}){
