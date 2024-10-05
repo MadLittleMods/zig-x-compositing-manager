@@ -11,25 +11,23 @@ const x11_extension_utils = @import("./x11_extension_utils.zig");
 /// Check to make sure we're using a compatible version of the X Input extension
 /// that supports all of the features we need.
 pub fn ensureCompatibleVersionOfXShapeExtension(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     shape_extension: *const x11_extension_utils.ExtensionInfo,
     version: struct {
         major_version: u16,
         minor_version: u16,
     },
 ) !void {
-    const reader = common.SocketReader{ .context = sock };
-    const buffer_limit = buffer.half_len;
+    const reader = common.SocketReader{ .context = x_connection.socket };
 
     {
         var message_buffer: [x.shape.query_version.len]u8 = undefined;
         x.shape.query_version.serialize(&message_buffer, shape_extension.opcode);
-        try common.send(sock, &message_buffer);
+        try common.send(x_connection.socket, &message_buffer);
     }
-    const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-    switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+    const message_length = try x.readOneMsg(reader, @alignCast(x_connection.buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer_limit);
+    switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
         .reply => |msg_reply| {
             const msg: *x.shape.query_version.Reply = @ptrCast(msg_reply);
             std.log.info("X SHAPE extension: version {}.{}", .{ msg.major_version, msg.minor_version });

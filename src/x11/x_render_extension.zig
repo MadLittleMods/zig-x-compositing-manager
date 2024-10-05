@@ -13,16 +13,14 @@ const x11_extension_utils = @import("./x11_extension_utils.zig");
 /// Check to make sure we're using a compatible version of the X Render extension
 /// that supports all of the features we need.
 pub fn ensureCompatibleVersionOfXRenderExtension(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     render_extension: *const x11_extension_utils.ExtensionInfo,
     version: struct {
         major_version: u32,
         minor_version: u32,
     },
 ) !void {
-    const reader = common.SocketReader{ .context = sock };
-    const buffer_limit = buffer.half_len;
+    const reader = common.SocketReader{ .context = x_connection.socket };
 
     {
         var message_buffer: [x.render.query_version.len]u8 = undefined;
@@ -30,11 +28,11 @@ pub fn ensureCompatibleVersionOfXRenderExtension(
             .major_version = version.major_version,
             .minor_version = version.minor_version,
         });
-        try common.send(sock, &message_buffer);
+        try common.send(x_connection.socket, &message_buffer);
     }
-    const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-    switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+    const message_length = try x.readOneMsg(reader, @alignCast(x_connection.buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer_limit);
+    switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
         .reply => |msg_reply| {
             const msg: *x.render.query_version.Reply = @ptrCast(msg_reply);
             std.log.info("X Render extension: version {}.{}", .{ msg.major_version, msg.minor_version });
@@ -60,4 +58,121 @@ pub fn ensureCompatibleVersionOfXRenderExtension(
             return error.ExpectedReplyButGotSomethingElse;
         },
     }
+}
+
+pub fn findPictureFormatForVisualId(
+    sock: std.os.socket_t,
+    buffer: *x.ContiguousReadBuffer,
+    visual_id: u32,
+    extensions: *const x11_extension_utils.Extensions(&.{.render}),
+) !?x.render.PictureFormatInfo {
+    const reader = common.SocketReader{ .context = sock };
+    const buffer_limit = buffer.half_len;
+
+    // Find some compatible picture formats for use with the X Render extension. We want
+    // to find a 24-bit depth format for use with the root window and a 32-bit depth
+    // format for use with our window.
+    {
+        var message_buffer: [x.render.query_pict_formats.len]u8 = undefined;
+        x.render.query_pict_formats.serialize(&message_buffer, extensions.render.opcode);
+        try common.send(sock, &message_buffer);
+    }
+    const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+    const opt_picture_format: ?x.render.PictureFormatInfo = blk: {
+        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+            .reply => |msg_reply| {
+                const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
+
+                const opt_picture_format_id: ?u32 = blk_picture_format_id: {
+                    for (0..msg.num_screens) |screen_index| {
+                        const picture_screen = try msg.getPictureScreenAtIndex(@intCast(screen_index));
+                        for (0..picture_screen.num_depths) |depth_index| {
+                            const picture_depth = try picture_screen.getPictureDepthAtIndex(@intCast(depth_index));
+                            const picture_visuals = picture_depth.getPictureVisuals();
+                            for (picture_visuals) |picture_visual| {
+                                if (picture_visual.visual_id == visual_id) {
+                                    break :blk_picture_format_id picture_visual.picture_format_id;
+                                }
+                            }
+                        }
+                    }
+
+                    break :blk_picture_format_id null;
+                };
+
+                if (opt_picture_format_id) |picture_format_id| {
+                    const picture_formats = msg.getPictureFormats();
+                    for (picture_formats) |picture_format| {
+                        if (picture_format.picture_format_id == picture_format_id) {
+                            break :blk picture_format;
+                        }
+                    }
+                }
+
+                return null;
+            },
+            else => |msg| {
+                std.log.err("expected a reply for `x.render.query_pict_formats` but got {}", .{msg});
+                return error.ExpectedReplyButGotSomethingElse;
+            },
+        }
+    };
+
+    return opt_picture_format;
+}
+
+/// We need to create a picture for every drawable/window that we want to use with the X Render
+/// extension
+pub fn createPictureForWindow(
+    sock: std.os.socket_t,
+    buffer: *x.ContiguousReadBuffer,
+    picture_id: u32,
+    /// Drawable/window_id
+    drawable_id: u32,
+    extensions: *const x11_extension_utils.Extensions(&.{.render}),
+) !void {
+    const reader = common.SocketReader{ .context = sock };
+    const buffer_limit = buffer.half_len;
+
+    // Find the `visual_id` for this window
+    {
+        var msg_buf: [x.get_window_attributes.len]u8 = undefined;
+        x.get_window_attributes.serialize(&msg_buf, drawable_id);
+        try common.send(sock, &msg_buf);
+    }
+    const visual_id = blk: {
+        const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
+        try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+            .reply => |msg_reply| {
+                const msg: *x.get_window_attributes.Reply = @ptrCast(msg_reply);
+                break :blk msg.visual_id;
+            },
+            else => |msg| {
+                std.log.err("expected a reply for `x.get_window_attributes` but got {}", .{msg});
+                return error.ExpectedReplyForGetWindowAttributes;
+            },
+        }
+    };
+
+    // Find the picture format that matches the `visual_id` of the window
+    const opt_matching_picture_format = try findPictureFormatForVisualId(
+        sock,
+        buffer,
+        visual_id,
+        extensions,
+    );
+    const matching_picture_format = opt_matching_picture_format orelse {
+        return error.NoMatchingPictureFormatForWindowVisualType;
+    };
+
+    var message_buffer: [x.render.create_picture.max_len]u8 = undefined;
+    const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
+        .picture_id = picture_id,
+        .drawable_id = drawable_id,
+        .format_id = matching_picture_format.picture_format_id,
+        .options = .{},
+    });
+    try common.send(sock, message_buffer[0..len]);
 }

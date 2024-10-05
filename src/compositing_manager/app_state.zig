@@ -3,6 +3,7 @@ const render_utils = @import("../utils/render_utils.zig");
 
 pub const Window = struct {
     window_id: u32,
+    visible: bool,
     x: i16,
     y: i16,
     width: u16,
@@ -15,5 +16,8 @@ pub const AppState = struct {
     /// The pixel dimensions of the screen/monitor
     root_screen_dimensions: render_utils.Dimensions,
 
-    windows: *std.ArrayList(Window),
+    // FIXME: It would be good to use a specific `const WindowID = enum(u32) { _ }` type here
+    window_map: *std.AutoHashMap(u32, Window),
+    /// window_id -> picture_id
+    window_to_picture_id_map: *std.AutoHashMap(u32, u32),
 };

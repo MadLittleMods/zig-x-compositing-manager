@@ -25,28 +25,60 @@ pub fn main() !void {
     };
 
     try x.wsaStartup();
-    const conn = try common.connect(allocator);
-    defer std.os.shutdown(conn.sock, .both) catch {};
-    defer conn.setup.deinit(allocator);
-    const conn_setup_fixed_fields = conn.setup.fixed();
+
+    // We establish two distinct connections to the X server:
+    //
+    // 1. Event Connection: Used for reading events in the main event loop.
+    //    - One exception is that we have to make `x.create_window` or
+    //      `x.configure_window` requests with this connection in order to specify the
+    //      events that we want to subscribe to.
+    // 2. Request Connection: Used for making one-shot requests and reading their replies.
+    //
+    // This dual-connection approach offers several benefits:
+    // - Clear Separation: It keeps event handling separate from one-shot requests.
+    // - Simplified Reply Handling: We can easily get replies to one-shot requests
+    //   without worrying about them being mixed with event messages.
+    // - No Complex Queuing: Unlike the xcb library, we avoid the need for a
+    //   cookie-based reply queue system.
+    //
+    // This design leads to cleaner, more maintainable code by reducing complexity
+    // in handling different types of X server interactions.
+    //
+    // 1. Create an X connection for the event loop
+    const x_event_connect_result = try common.connect(allocator);
+    defer x_event_connect_result.setup.deinit(allocator);
+    const x_event_connection = try common.XConnection.init(
+        x_event_connect_result.sock,
+        1000,
+    );
+    defer x_event_connection.deinit();
+    // 2. Create an X connection for making one-off requests
+    const x_request_connect_result = try common.connect(allocator);
+    defer x_request_connect_result.setup.deinit(allocator);
+    const x_request_connection = try common.XConnection.init(
+        x_request_connect_result.sock,
+        1000,
+    );
+    defer x_request_connection.deinit();
+
+    const conn_setup_fixed_fields = x_event_connect_result.setup.fixed();
     // Print out some info about the X server we connected to
     {
         inline for (@typeInfo(@TypeOf(conn_setup_fixed_fields.*)).Struct.fields) |field| {
             std.log.debug("{s}: {any}", .{ field.name, @field(conn_setup_fixed_fields, field.name) });
         }
-        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
+        std.log.debug("vendor: {s}", .{try x_event_connect_result.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
     }
 
-    const screen = common.getFirstScreenFromConnectionSetup(conn.setup);
+    const screen = common.getFirstScreenFromConnectionSetup(x_event_connect_result.setup);
     inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
         std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
     }
-
     std.log.info("root window ID {0} 0x{0x}", .{screen.root});
 
-    // Create a big buffer that we can use to read messages and replies from the X server.
+    // Create a big buffer that we can use to read events and replies from the X server.
     const double_buffer = try x.DoubleBuffer.init(
-        std.mem.alignForward(usize, 8000, std.mem.page_size),
+        std.mem.alignForward(usize, 1000, std.mem.page_size),
         .{ .memfd_name = "ZigX11DoubleBuffer" },
     );
     defer double_buffer.deinit(); // not necessary but good to test
@@ -56,15 +88,13 @@ pub fn main() !void {
 
     // We use the X Composite extension to redirect the rendering of the windows to offscreen storage.
     const optional_composite_extension = try x11_extension_utils.getExtensionInfo(
-        conn.sock,
-        &buffer,
+        x_request_connection,
         "Composite",
     );
     const composite_extension = optional_composite_extension orelse @panic("X Composite extension extension not found");
 
     try x_composite_extension.ensureCompatibleVersionOfXCompositeExtension(
-        conn.sock,
-        &buffer,
+        x_request_connection,
         &composite_extension,
         .{
             // We require version 0.3 of the X Composite extension for the
@@ -77,15 +107,13 @@ pub fn main() !void {
     // We use the X Shape extension to make the debug window click-through-able. If
     // you're familiar with CSS, we use this to apply `pointer-events: none;`.
     const optional_shape_extension = try x11_extension_utils.getExtensionInfo(
-        conn.sock,
-        &buffer,
+        x_request_connection,
         "SHAPE",
     );
     const shape_extension = optional_shape_extension orelse @panic("X SHAPE extension not found");
 
     try x_shape_extension.ensureCompatibleVersionOfXShapeExtension(
-        conn.sock,
-        &buffer,
+        x_request_connection,
         &shape_extension,
         .{
             // We arbitrarily require version 1.1 of the X Shape extension
@@ -100,15 +128,13 @@ pub fn main() !void {
     // our window. Useful because their "composite" request works with mismatched depths
     // between the source and destinations.
     const optional_render_extension = try x11_extension_utils.getExtensionInfo(
-        conn.sock,
-        &buffer,
+        x_request_connection,
         "RENDER",
     );
     const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
 
     try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
-        conn.sock,
-        &buffer,
+        x_request_connection,
         &render_extension,
         .{
             // We arbitrarily require version 0.11 of the X Render extension just
@@ -146,7 +172,7 @@ pub fn main() !void {
             // window ourselves taking alpha/transparency into account.
             .update_type = .manual,
         });
-        try conn.send(&message_buffer);
+        try x_event_connect_result.send(&message_buffer);
     }
 
     // Get the overlay window that we can draw on without interference. This window is
@@ -160,10 +186,10 @@ pub fn main() !void {
         x.composite.get_overlay_window.serialize(&message_buffer, composite_extension.opcode, .{
             .window_id = screen.root,
         });
-        try conn.send(&message_buffer);
+        try x_event_connect_result.send(&message_buffer);
     }
     const overlay_window_id = blk: {
-        const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+        const message_length = try x.readOneMsg(x_event_connect_result.reader(), @alignCast(buffer.nextReadBuffer()));
         try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
@@ -177,10 +203,10 @@ pub fn main() !void {
         }
     };
 
-    const ids = render.Ids.init(
+    var ids = render.Ids.init(
         screen.root,
         overlay_window_id,
-        conn.setup.fixed().resource_id_base,
+        x_event_connect_result.setup.fixed().resource_id_base,
     );
     std.log.debug("ids: {any}", .{ids});
 
@@ -192,21 +218,24 @@ pub fn main() !void {
         .height = @intCast(screen.pixel_height),
     };
 
-    var window_list = std.ArrayList(app_state.Window).init(allocator);
-    defer window_list.deinit();
+    var window_map = std.AutoHashMap(u32, app_state.Window).init(allocator);
+    defer window_map.deinit();
+    var window_to_picture_id_map = std.AutoHashMap(u32, u32).init(allocator);
     const state = app_state.AppState{
         .root_screen_dimensions = root_screen_dimensions,
-        .windows = &window_list,
+        .window_map = &window_map,
+        .window_to_picture_id_map = &window_to_picture_id_map,
     };
 
     // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
     // going to create our own window with 32-bit depth with the same dimensions as
     // overlay/root with the `overlay_window_id` as the parent.
     try render.createResources(
-        conn.sock,
+        x_event_connect_result.sock,
         &buffer,
         &ids,
         screen,
+        &extensions,
         depth,
         &state,
     );
@@ -230,7 +259,7 @@ pub fn main() !void {
             .ordering = .unsorted,
             .rectangles = &rectangle_list,
         });
-        try conn.send(&msg);
+        try x_event_connect_result.send(&msg);
     }
     // Also do this to our own 32-bit depth overlay window
     {
@@ -247,7 +276,7 @@ pub fn main() !void {
             .ordering = .unsorted,
             .rectangles = &rectangle_list,
         });
-        try conn.send(&msg);
+        try x_event_connect_result.send(&msg);
     }
 
     // We want to know when a window is created/destroyed, moved, resized, show/hide,
@@ -270,7 +299,7 @@ pub fn main() !void {
             //
             // | x.event.substructure_redirect,
         });
-        try conn.send(message_buffer[0..len]);
+        try x_event_connect_result.send(message_buffer[0..len]);
     }
 
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
@@ -279,11 +308,11 @@ pub fn main() !void {
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
-        try conn.send(&msg);
+        try x_event_connect_result.send(&msg);
     }
 
     var render_context = render.RenderContext{
-        .sock = &conn.sock,
+        .sock = &x_event_connect_result.sock,
         .ids = &ids,
         .extensions = &extensions,
         .state = &state,
@@ -296,7 +325,7 @@ pub fn main() !void {
                 std.log.err("buffer size {} not big enough!", .{buffer.half_len});
                 return error.BufferSizeNotBigEnough;
             }
-            const len = try x.readSock(conn.sock, receive_buffer, 0);
+            const len = try x.readSock(x_event_connect_result.sock, receive_buffer, 0);
             if (len == 0) {
                 std.log.info("X server connection closed", .{});
                 return;
@@ -326,20 +355,43 @@ pub fn main() !void {
                 },
                 .create_notify => |msg| {
                     std.log.info("create_notify: {}", .{msg});
-                    try state.windows.append(.{
+                    try state.window_map.put(msg.window_id, .{
                         .window_id = msg.window_id,
+                        // When windows are initially created, they are unmapped (or
+                        // hidden).
+                        .visible = false,
                         .x = msg.x_position,
                         .y = msg.y_position,
                         .width = msg.width,
                         .height = msg.height,
                     });
-                    try render_context.render();
                 },
                 .destroy_notify => |msg| {
                     std.log.info("destroy_notify: {}", .{msg});
+                    _ = state.window_map.remove(msg.target_window_id);
+                    _ = state.window_to_picture_id_map.remove(msg.target_window_id);
                 },
                 .map_notify => |msg| {
                     std.log.info("map_notify: {}", .{msg});
+
+                    // TODO: NameWindowPixmap, 'window' will get a new pixmap allocated
+                    // each time it is mapped or resized, so this request will need to
+                    // be reinvoked for the client to continue to refer to the storage
+                    // holding the current window contents
+
+                    const window_picture_id = ids.generateMonotonicId();
+                    try x_render_extension.createPictureForWindow(
+                        x_event_connect_result.sock,
+                        &buffer,
+                        window_picture_id,
+                        msg.window,
+                        &x11_extension_utils.Extensions(&.{.render}){
+                            .render = extensions.render,
+                        },
+                    );
+                    try state.window_to_picture_id_map.put(msg.window, window_picture_id);
+
+                    try render_context.render();
                 },
                 .unmap_notify => |msg| {
                     std.log.info("unmap_notify: {}", .{msg});

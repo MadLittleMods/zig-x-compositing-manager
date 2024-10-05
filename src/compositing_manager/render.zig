@@ -2,6 +2,7 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("../x11/x11_common.zig");
 const x11_extension_utils = @import("../x11/x11_extension_utils.zig");
+const x11_render_extension = @import("../x11/x_render_extension.zig");
 const AppState = @import("app_state.zig").AppState;
 const render_utils = @import("../utils/render_utils.zig");
 const FontDims = render_utils.FontDims;
@@ -12,6 +13,7 @@ pub const Ids = struct {
 
     /// The drawable ID of the root window
     root: u32,
+    /// The drawable ID of the composite overlay window
     overlay_window_id: u32,
     /// The base resource ID that we can increment from to assign and designate to new
     /// resources.
@@ -21,6 +23,7 @@ pub const Ids = struct {
 
     /// The drawable ID of our window
     window: u32 = 0,
+
     colormap: u32 = 0,
     /// Background graphics context.
     bg_gc: u32 = 0,
@@ -28,6 +31,10 @@ pub const Ids = struct {
     fg_gc: u32 = 0,
     /// Graphics context for the overlay window
     overlay_gc: u32 = 0,
+
+    // We need to create a "picture" version of every drawable for use with the X Render
+    // extension.
+    picture_window: u32 = 0,
 
     pub fn init(root: u32, overlay_window_id: u32, base_resource_id: u32) Self {
         var ids = Ids{
@@ -50,7 +57,7 @@ pub const Ids = struct {
     }
 
     /// Returns an ever-increasing ID everytime the function is called
-    fn generateMonotonicId(self: *Ids) u32 {
+    pub fn generateMonotonicId(self: *Ids) u32 {
         const current_id = self._current_id;
         self._current_id += 1;
         return current_id;
@@ -63,10 +70,10 @@ pub fn createResources(
     buffer: *x.ContiguousReadBuffer,
     ids: *const Ids,
     screen: *align(4) x.Screen,
+    extensions: *const x11_extension_utils.Extensions(&.{ .composite, .shape, .render }),
     depth: u8,
     state: *const AppState,
 ) !void {
-    _ = buffer;
     // const reader = common.SocketReader{ .context = sock };
     // const buffer_limit = buffer.half_len;
 
@@ -142,6 +149,34 @@ pub fn createResources(
             // .save_under = true,
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
             // .dont_propagate = 1,
+        });
+        try common.send(sock, message_buffer[0..len]);
+    }
+
+    const opt_matching_picture_format = try x11_render_extension.findPictureFormatForVisualId(
+        sock,
+        buffer,
+        matching_visual_type.id,
+        &x11_extension_utils.Extensions(&.{.render}){
+            .render = extensions.render,
+        },
+    );
+    const matching_picture_format = opt_matching_picture_format orelse {
+        return error.NoMatchingPictureFormatForWindowVisualType;
+    };
+
+    // We need to create a picture for every drawable that we want to use with the X
+    // Render extension
+    // =============================================================================
+    //
+    // Create a picture for the our window that we can copy and composite things onto
+    {
+        var message_buffer: [x.render.create_picture.max_len]u8 = undefined;
+        const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
+            .picture_id = ids.picture_window,
+            .drawable_id = ids.window,
+            .format_id = matching_picture_format.picture_format_id,
+            .options = .{},
         });
         try common.send(sock, message_buffer[0..len]);
     }
@@ -241,20 +276,36 @@ pub const RenderContext = struct {
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
-        const sock = self.sock.*;
+        _ = self;
+        // const sock = self.sock.*;
 
-        for (self.state.windows.items) |window| {
-            // Draw a big blue square in the middle of the window
-            {
-                var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-                x.poly_fill_rectangle.serialize(&msg, .{
-                    .drawable_id = self.ids.window,
-                    .gc_id = self.ids.bg_gc,
-                }, &[_]x.Rectangle{
-                    .{ .x = window.x, .y = window.y, .width = window.width, .height = window.height },
-                });
-                try common.send(sock, &msg);
-            }
-        }
+        // var window_map_iterator = self.state.window_map.iterator();
+        // while (window_map_iterator.next()) |window_entry| {
+        //     const window_id = window_entry.key_ptr.*;
+        //     const window = window_entry.value_ptr;
+
+        //     const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
+        //     if (opt_picture_id) |picture_id| {
+        //         var msg: [x.render.composite.len]u8 = undefined;
+        //         x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
+        //             .picture_operation = .over,
+        //             .src_picture_id = picture_id,
+        //             .mask_picture_id = 0,
+        //             .dst_picture_id = self.ids.picture_window,
+        //             .src_x = 0,
+        //             .src_y = 0,
+        //             .mask_x = 0,
+        //             .mask_y = 0,
+        //             .dst_x = window.x,
+        //             .dst_y = window.y,
+        //             .width = window.width,
+        //             .height = window.height,
+        //         });
+        //         try common.send(sock, &msg);
+        //     } else {
+        //         std.log.err("No picture ID found for window_id {}", .{window_id});
+        //         continue;
+        //     }
+        // }
     }
 };

@@ -32,23 +32,21 @@ pub fn Extensions(comptime extensions: []const AvailableExtensions) type {
 
 /// Determines whether the extension is available on the server.
 pub fn getExtensionInfo(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     comptime extension_name: []const u8,
 ) !?ExtensionInfo {
-    const reader = common.SocketReader{ .context = sock };
-    const buffer_limit = buffer.half_len;
+    const reader = common.SocketReader{ .context = x_connection.socket };
 
     {
         const ext_name = comptime x.Slice(u16, [*]const u8).initComptime(extension_name);
         var message_buffer: [x.query_extension.getLen(ext_name.len)]u8 = undefined;
         x.query_extension.serialize(&message_buffer, ext_name);
-        try common.send(sock, &message_buffer);
+        try common.send(x_connection.socket, &message_buffer);
     }
-    const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+    const message_length = try x.readOneMsg(reader, @alignCast(x_connection.buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer_limit);
     const optional_render_extension = blk: {
-        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+        switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.ServerMsg.QueryExtension = @ptrCast(msg_reply);
                 if (msg.present == 0) {

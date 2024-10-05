@@ -29,6 +29,41 @@ pub const ConnectResult = struct {
     }
 };
 
+pub const XConnection = struct {
+    /// Connection to the X server.
+    socket: std.os.socket_t,
+    double_buffer: *const x.DoubleBuffer,
+    buffer: *x.ContiguousReadBuffer,
+    buffer_limit: usize,
+
+    pub fn init(
+        socket: std.os.socket_t,
+        /// Good rule of thumb is 1000 for events or 10000 for replies (for example, the
+        /// reply for `x.render.query_pict_formats` is 4888 bytes on my system)
+        buffer_size: usize,
+    ) !@This() {
+        // Create a big buffer that we can use to read events and replies from the X server.
+        const double_buffer = try x.DoubleBuffer.init(
+            std.mem.alignForward(usize, buffer_size, std.mem.page_size),
+            .{ .memfd_name = "ZigX11DoubleBuffer" },
+        );
+        var buffer = double_buffer.contiguousReadBuffer();
+        const buffer_limit = buffer.half_len;
+
+        return .{
+            .socket = socket,
+            .double_buffer = &double_buffer,
+            .buffer = &buffer,
+            .buffer_limit = buffer_limit,
+        };
+    }
+
+    pub fn deinit(self: *const XConnection) void {
+        self.double_buffer.deinit(); // not necessary but good to test
+        std.os.shutdown(self.socket, .both) catch {};
+    }
+};
+
 pub fn connectSetupMaxAuth(
     sock: std.os.socket_t,
     comptime max_auth_len: usize,
@@ -202,29 +237,6 @@ pub fn checkMessageLengthFitsInBuffer(message_length: usize, buffer_limit: usize
             buffer_limit,
         });
     }
-}
-
-/// Given a list of picture formats, finds the first one that matches the desired depth.
-pub fn findMatchingPictureFormatForDepth(
-    formats: []const x.render.PictureFormatInfo,
-    desired_depth: u8,
-) !x.render.PictureFormatInfo {
-    for (formats) |format| {
-        if (format.depth != desired_depth) continue;
-        return format;
-    }
-    return error.PictureFormatNotFound;
-}
-
-pub fn findMatchingPixmapFormatForDepth(
-    formats: []const x.Format,
-    desired_depth: u8,
-) !x.Format {
-    for (formats) |format| {
-        if (format.depth != desired_depth) continue;
-        return format;
-    }
-    return error.PixmapFormatNotFound;
 }
 
 pub fn getFirstScreenFromConnectionSetup(conn_setup: x.ConnectSetup) *x.Screen {

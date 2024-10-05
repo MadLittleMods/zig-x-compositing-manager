@@ -22,15 +22,21 @@ Other window manager articles:
 
  - https://www.uninformativ.de/blog/postings/2016-01-05/0/POSTING-en.html
 
+Other articles:
+
+ - Basic Graphics Programming With The XCB Library: https://www.x.org/releases/X11R7.6/doc/libxcb/tutorial/index.html
+
 
 Compositing manager examples:
 
+ - https://github.com/dosbre/xray
  - Extremely basic X11 compositing window manager written in C with Xlib and OpenGL: https://github.com/obiwac/x-compositing-wm
  - Sample X compositing manager (the original demo): https://gitlab.freedesktop.org/xorg/app/xcompmgr
     - `xcompmgr` is a sample compositing manager for X servers supporting the `XFIXES`, `DAMAGE`, `RENDER`, and `COMPOSITE` extensions.  It enables basic eye-candy effects.
  - https://github.com/gustavosbarreto/compmgr
  - https://projects.mini-dweeb.org/projects/unagi
  - [`LamaAni/WebMachine` -> `Testing/cwm.js`](https://github.com/LamaAni/WebMachine/blob/033a0ccafc658a65d8f8f95776113be6681f5edf/Testing/cwm.js
+ - https://github.com/yshui/picom/
 
 Other window manager examples:
 
@@ -44,6 +50,7 @@ Other window manager examples:
    - Tiling window manager: https://github.com/pra1rie/fuckwm
    - https://github.com/last-arg/buoy
    - Tiling window manager: https://github.com/chip2n/zwm
+   - Rewrite of `dwm` in Zig: https://github.com/MainKt/zwm
    - https://github.com/Polymethylmethacrylat/m349wm
  - https://github.com/jichu4n/basic_wm
  - https://github.com/mackstann/tinywm
