@@ -292,6 +292,10 @@ pub const RenderContext = struct {
 
             const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
             if (opt_picture_id) |picture_id| {
+                // We use the `x.render.composite` request to instead of `x.copy_area`
+                // because it supports copying from windows with differing depths and we
+                // want the alpha/transparency support which only `x.render.composite`
+                // can do.
                 var msg: [x.render.composite.len]u8 = undefined;
                 x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
                     .picture_operation = .over,

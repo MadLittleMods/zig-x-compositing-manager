@@ -232,8 +232,9 @@ pub fn main() !void {
     };
 
     // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
-    // going to create our own window with 32-bit depth with the same dimensions as
-    // overlay/root with the `overlay_window_id` as the parent.
+    // going to create our own window with 32-bit depth (for alpha/transparency support)
+    // with the same dimensions as overlay/root with the `overlay_window_id` as the
+    // parent.
     try render.createResources(
         x_request_connection,
         &ids,
