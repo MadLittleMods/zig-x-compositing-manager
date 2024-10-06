@@ -29,9 +29,9 @@ pub fn main() !void {
     // We establish two distinct connections to the X server:
     //
     // 1. Event Connection: Used for reading events in the main event loop.
-    //    - One exception is that we have to make `x.create_window` or
-    //      `x.change_window_attributes` requests with this connection in order to specify the
-    //      events that we want to subscribe to.
+    //    - Make sure to call `x.change_window_attributes` on the windows you care about
+    //      listening for events on. Specify `.event_mask` with the events you want the
+    //      event loop to subscribe to.
     // 2. Request Connection: Used for making one-shot requests and reading their replies.
     //
     // This dual-connection approach offers several benefits:
@@ -204,17 +204,15 @@ pub fn main() !void {
         }
     };
 
-    var ids = render.Ids.init(
-        screen.root,
-        overlay_window_id,
-        // Use the event connection's resource ID base for the window ID base because we
-        // create everything with the event connection in order to subscribe to events.
-        x_event_connect_result.setup.fixed().resource_id_base,
-    );
-    std.log.debug("ids: {any}", .{ids});
     var request_id_generator = render.IdGenerator.init(
         x_request_connect_result.setup.fixed().resource_id_base,
     );
+    var ids = render.Ids.init(
+        screen.root,
+        overlay_window_id,
+        &request_id_generator,
+    );
+    std.log.debug("ids: {any}", .{ids});
 
     // We're using 32-bit depth so we can use ARGB colors that include alpha/transparency
     const depth = 32;
@@ -237,10 +235,7 @@ pub fn main() !void {
     // going to create our own window with 32-bit depth with the same dimensions as
     // overlay/root with the `overlay_window_id` as the parent.
     try render.createResources(
-        // XXX: We have to use the `x_event_connection` in because this calls
-        // `x.create_window` and configures which events we should listen to in the
-        // `.event_mask`
-        x_event_connection,
+        x_request_connection,
         &ids,
         screen,
         &extensions,
@@ -424,10 +419,10 @@ pub fn main() !void {
 
                     // We expect an entry to already be in the `window_map` because we
                     // should have received a `create_notify` event before this.
-                    const existing_window_entry = state.window_map.get(msg.window_id) orelse return error.ConfigureNotifyWindowNotFound;
+                    const existing_window_entry = state.window_map.get(msg.window) orelse return error.ConfigureNotifyWindowNotFound;
 
-                    try state.window_map.put(msg.window_id, .{
-                        .window_id = msg.window_id,
+                    try state.window_map.put(msg.window, .{
+                        .window_id = msg.window,
                         .visible = existing_window_entry.visible,
                         .x = msg.x,
                         .y = msg.y,

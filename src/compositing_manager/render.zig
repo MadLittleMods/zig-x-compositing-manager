@@ -52,13 +52,11 @@ pub const Ids = struct {
     // extension.
     picture_window: u32 = 0,
 
-    pub fn init(root: u32, overlay_window_id: u32, base_resource_id: u32) @This() {
+    pub fn init(root: u32, overlay_window_id: u32, id_generator: *IdGenerator) @This() {
         var ids = Ids{
             .root = root,
             .overlay_window_id = overlay_window_id,
         };
-
-        var id_generator = IdGenerator.init(base_resource_id);
 
         // For any ID that isn't set yet (still has the default value of 0), generate
         // a new ID. This is a lot more fool-proof than trying to set the IDs manually
@@ -152,7 +150,12 @@ pub fn createResources(
             // we want to override the behavior.
             .override_redirect = false,
             // .save_under = true,
-            .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+
+            // We don't need to know about any events for this window as everything is
+            // just passed through to the actual underlying windows.
+            //
+            // .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+
             // .dont_propagate = 1,
         });
         try x_connection.send(message_buffer[0..len]);
