@@ -20,4 +20,6 @@ pub const AppState = struct {
     window_map: *std.AutoHashMap(u32, Window),
     /// window_id -> picture_id
     window_to_picture_id_map: *std.AutoHashMap(u32, u32),
+    /// window_id -> region_id
+    window_to_region_id_map: *std.AutoHashMap(u32, u32),
 };

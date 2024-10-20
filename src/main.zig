@@ -7,6 +7,8 @@ const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_composite_extension = @import("x11/x_composite_extension.zig");
 const x_shape_extension = @import("x11/x_shape_extension.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
+const x_damage_extension = @import("x11/x_damage_extension.zig");
+const x_fixes_extension = @import("x11/x_fixes_extension.zig");
 const render_utils = @import("utils/render_utils.zig");
 
 // In order to create the total screen presentation we need to create a render picture
@@ -142,6 +144,41 @@ pub fn main() !void {
         },
     );
 
+    // We use the X Damage extension to get notified when a region is damaged (where a
+    // window would be drawn) and needs to be redrawn.
+    const optional_damage_extension = try x11_extension_utils.getExtensionInfo(
+        x_request_connection,
+        "DAMAGE",
+    );
+    const damage_extension = optional_damage_extension orelse @panic("X Damage extension extension not found");
+
+    try x_damage_extension.ensureCompatibleVersionOfXDamageExtension(
+        x_request_connection,
+        &damage_extension,
+        .{
+            // This just seems like the only veresion
+            .major_version = 1,
+            .minor_version = 1,
+        },
+    );
+
+    // We use the X Fixes extension to create regions to use with the Damage extension.
+    const optional_fixes_extension = try x11_extension_utils.getExtensionInfo(
+        x_request_connection,
+        "XFIXES",
+    );
+    const fixes_extension = optional_fixes_extension orelse @panic("X Fixes extension extension not found");
+
+    try x_fixes_extension.ensureCompatibleVersionOfXFixesExtension(
+        x_request_connection,
+        &fixes_extension,
+        .{
+            // We only use requests from version 2.0 or lower from the X Fixes extension
+            .major_version = 2,
+            .minor_version = 0,
+        },
+    );
+
     // Assemble a map of X extension info
     const extensions = x11_extension_utils.Extensions(&.{ .composite, .shape, .render }){
         .composite = composite_extension,
@@ -225,10 +262,12 @@ pub fn main() !void {
     var window_map = std.AutoHashMap(u32, app_state.Window).init(allocator);
     defer window_map.deinit();
     var window_to_picture_id_map = std.AutoHashMap(u32, u32).init(allocator);
+    var window_to_region_id_map = std.AutoHashMap(u32, u32).init(allocator);
     const state = app_state.AppState{
         .root_screen_dimensions = root_screen_dimensions,
         .window_map = &window_map,
         .window_to_picture_id_map = &window_to_picture_id_map,
+        .window_to_region_id_map = &window_to_region_id_map,
     };
 
     // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
@@ -431,6 +470,20 @@ pub fn main() !void {
                         .height = msg.height,
                     });
 
+                    const region_id = request_id_generator.generateMonotonicId();
+                    {
+                        var request_message: [x.fixes.create_region_from_window.len]u8 = undefined;
+                        x.fixes.create_region_from_window.serialize(&request_message, .{
+                            .ext_opcode = fixes_extension.opcode,
+                            .region_id = region_id,
+                            .window_id = msg.window,
+                            .kind = .bounding,
+                        });
+                        try x_request_connection.send(&request_message);
+                    }
+                    try state.window_to_region_id_map.put(msg.window, region_id);
+                    // TODO: track damage
+
                     // Render after the window changes position or size
                     try render_context.render();
                 },
@@ -566,6 +619,8 @@ test "end-to-end" {
         break :blk &test_window_process;
     };
 
+    // Just wait some time so we can see that the windows are overlapping and we can see
+    // them updating.
     std.time.sleep(2 * std.time.ns_per_s);
 
     _ = try test_window_process1.kill();

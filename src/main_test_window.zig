@@ -134,7 +134,9 @@ pub fn main() !void {
     while (true) {
         try render_context.render();
         // We don't need to render so often as the display refresh rate is only so fast.
-        // Let's just say 120hz since it's not that important.
+        // Let's just say 120hz since it's not that important. This is just a cheap way
+        // to prevent "spinning" and doesn't account for the rest of the time it takes
+        // to render the window.
         std.time.sleep(8 * std.time.ns_per_ms);
     }
 
