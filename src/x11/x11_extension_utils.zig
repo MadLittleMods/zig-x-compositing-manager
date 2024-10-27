@@ -10,6 +10,8 @@ pub const ExtensionInfo = struct {
     /// intended for (used as the major opcode). This essentially namespaces any extension
     /// requests. The extension differentiates its own requests by using a minor opcode.
     opcode: u8,
+    /// Extension events are added on top of this base event code.
+    base_event_code: u8,
     /// Extension error codes are added on top of this base error code.
     base_error_code: u8,
 };
@@ -18,6 +20,8 @@ const AvailableExtensions = enum {
     composite,
     shape,
     render,
+    fixes,
+    damage,
 };
 
 /// A map of X server extension names to their info.
@@ -52,15 +56,17 @@ pub fn getExtensionInfo(
                     break :blk null;
                 }
                 std.debug.assert(msg.present == 1);
-                std.log.info("{s} extension: opcode={} base_error_code={}", .{
+                std.log.info("{s} extension: opcode={} base_event_code={} base_error_code={}", .{
                     extension_name,
                     msg.major_opcode,
+                    msg.first_event,
                     msg.first_error,
                 });
                 std.log.info("{s} extension: {}", .{ extension_name, msg });
                 break :blk ExtensionInfo{
                     .extension_name = extension_name,
                     .opcode = msg.major_opcode,
+                    .base_event_code = msg.first_event,
                     .base_error_code = msg.first_error,
                 };
             },

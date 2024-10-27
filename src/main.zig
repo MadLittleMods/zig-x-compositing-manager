@@ -87,17 +87,6 @@ pub fn main() !void {
     );
     const composite_extension = optional_composite_extension orelse @panic("X Composite extension extension not found");
 
-    try x_composite_extension.ensureCompatibleVersionOfXCompositeExtension(
-        x_request_connection,
-        &composite_extension,
-        .{
-            // We require version 0.3 of the X Composite extension for the
-            // `x.composite.get_overlay_window` request.
-            .major_version = 0,
-            .minor_version = 3,
-        },
-    );
-
     // We use the X Shape extension to make the debug window click-through-able. If
     // you're familiar with CSS, we use this to apply `pointer-events: none;`.
     const optional_shape_extension = try x11_extension_utils.getExtensionInfo(
@@ -105,18 +94,6 @@ pub fn main() !void {
         "SHAPE",
     );
     const shape_extension = optional_shape_extension orelse @panic("X SHAPE extension not found");
-
-    try x_shape_extension.ensureCompatibleVersionOfXShapeExtension(
-        x_request_connection,
-        &shape_extension,
-        .{
-            // We arbitrarily require version 1.1 of the X Shape extension
-            // because that's the latest version and is sufficiently old
-            // and ubiquitous.
-            .major_version = 1,
-            .minor_version = 1,
-        },
-    );
 
     // We use the X Render extension for capturing screenshots and splatting them onto
     // our window. Useful because their "composite" request works with mismatched depths
@@ -127,23 +104,6 @@ pub fn main() !void {
     );
     const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
 
-    try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
-        x_request_connection,
-        &render_extension,
-        .{
-            // We arbitrarily require version 0.11 of the X Render extension just
-            // because it's the latest but came out in 2009 so it's pretty much
-            // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
-            // in 0.0.
-            //
-            // For more info on what's changed in each version, see the "15. Extension
-            // Versioning" section of the X Render extension protocol docs,
-            // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
-            .major_version = 0,
-            .minor_version = 11,
-        },
-    );
-
     // We use the X Damage extension to get notified when a region is damaged (where a
     // window would be drawn) and needs to be redrawn.
     const optional_damage_extension = try x11_extension_utils.getExtensionInfo(
@@ -152,16 +112,6 @@ pub fn main() !void {
     );
     const damage_extension = optional_damage_extension orelse @panic("X Damage extension extension not found");
 
-    try x_damage_extension.ensureCompatibleVersionOfXDamageExtension(
-        x_request_connection,
-        &damage_extension,
-        .{
-            // This just seems like the only veresion
-            .major_version = 1,
-            .minor_version = 1,
-        },
-    );
-
     // We use the X Fixes extension to create regions to use with the Damage extension.
     const optional_fixes_extension = try x11_extension_utils.getExtensionInfo(
         x_request_connection,
@@ -169,21 +119,87 @@ pub fn main() !void {
     );
     const fixes_extension = optional_fixes_extension orelse @panic("X Fixes extension extension not found");
 
-    try x_fixes_extension.ensureCompatibleVersionOfXFixesExtension(
-        x_request_connection,
-        &fixes_extension,
-        .{
-            // We only use requests from version 2.0 or lower from the X Fixes extension
-            .major_version = 2,
-            .minor_version = 0,
-        },
-    );
+    // We must run the query_version request of each extension on every connection that
+    // interacts with the extension. Most extensions have this behavior in the spec that
+    // it will return a "request" error (BadRequest) if haven't negotiated the version
+    // of the extension.
+    //
+    // > The client must negotiate the version of the extension before executing
+    // > extension requests.  Behavior of the server is undefined otherwise.
+    //
+    // > The client must negotiate the version of the extension before executing
+    // > extension requests.  Otherwise, the server will return BadRequest for any
+    // > operations other than QueryVersion.
+    const x_connections = [_]common.XConnection{ x_event_connection, x_request_connection };
+    for (x_connections) |x_connection| {
+        try x_composite_extension.ensureCompatibleVersionOfXCompositeExtension(
+            x_connection,
+            &composite_extension,
+            .{
+                // We require version 0.3 of the X Composite extension for the
+                // `x.composite.get_overlay_window` request.
+                .major_version = 0,
+                .minor_version = 3,
+            },
+        );
+
+        try x_shape_extension.ensureCompatibleVersionOfXShapeExtension(
+            x_connection,
+            &shape_extension,
+            .{
+                // We arbitrarily require version 1.1 of the X Shape extension
+                // because that's the latest version and is sufficiently old
+                // and ubiquitous.
+                .major_version = 1,
+                .minor_version = 1,
+            },
+        );
+
+        try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
+            x_connection,
+            &render_extension,
+            .{
+                // We arbitrarily require version 0.11 of the X Render extension just
+                // because it's the latest but came out in 2009 so it's pretty much
+                // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
+                // in 0.0.
+                //
+                // For more info on what's changed in each version, see the "15. Extension
+                // Versioning" section of the X Render extension protocol docs,
+                // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
+                .major_version = 0,
+                .minor_version = 11,
+            },
+        );
+
+        try x_damage_extension.ensureCompatibleVersionOfXDamageExtension(
+            x_connection,
+            &damage_extension,
+            .{
+                // This just seems like the only veresion
+                .major_version = 1,
+                .minor_version = 1,
+            },
+        );
+
+        try x_fixes_extension.ensureCompatibleVersionOfXFixesExtension(
+            x_connection,
+            &fixes_extension,
+            .{
+                // We only use requests from version 2.0 or lower from the X Fixes extension
+                .major_version = 2,
+                .minor_version = 0,
+            },
+        );
+    }
 
     // Assemble a map of X extension info
-    const extensions = x11_extension_utils.Extensions(&.{ .composite, .shape, .render }){
+    const extensions = x11_extension_utils.Extensions(&.{ .composite, .shape, .render, .fixes, .damage }){
         .composite = composite_extension,
         .shape = shape_extension,
         .render = render_extension,
+        .fixes = fixes_extension,
+        .damage = damage_extension,
     };
 
     // Redirect all of the subwindows of the root window to offscreen storage.
@@ -241,15 +257,24 @@ pub fn main() !void {
         }
     };
 
-    var request_id_generator = render.IdGenerator.init(
+    // Since each connection has a `base_resource_id`, let's create most resources with
+    // the request connection since that's easier
+    var request_connection_id_generator = render.IdGenerator.init(
         x_request_connect_result.setup.fixed().resource_id_base,
     );
     var ids = render.Ids.init(
         screen.root,
         overlay_window_id,
-        &request_id_generator,
+        &request_connection_id_generator,
     );
     std.log.debug("ids: {any}", .{ids});
+
+    // But we still need to create Damage resources with the event connection because
+    // they have coupled creating the Damage object with tracking the DamageNotify
+    // events.
+    var event_connection_id_generator = render.IdGenerator.init(
+        x_event_connect_result.setup.fixed().resource_id_base,
+    );
 
     // We're using 32-bit depth so we can use ARGB colors that include alpha/transparency
     const depth = 32;
@@ -278,7 +303,10 @@ pub fn main() !void {
         x_request_connection,
         &ids,
         screen,
-        &extensions,
+        &x11_extension_utils.Extensions(&.{ .composite, .render }){
+            .composite = extensions.composite,
+            .render = extensions.render,
+        },
         depth,
         &state,
     );
@@ -342,9 +370,40 @@ pub fn main() !void {
             //
             // | x.event.substructure_redirect,
         });
-        // XXX: We have to use the `x_event_connection` in because we're specifying
-        // which events we should listen to in the `.event_mask`
+        // XXX: Use the event connection so we get the events we subscribed to in the
+        // `.event_mask` in the event loop
         try x_event_connection.send(message_buffer[0..len]);
+    }
+
+    // Create a X Fixes region for the window to interact with the X Damage API's
+    {
+        var message_buffer: [x.fixes.create_region_from_window.len]u8 = undefined;
+        x.fixes.create_region_from_window.serialize(&message_buffer, .{
+            .ext_opcode = extensions.fixes.opcode,
+            .region_id = ids.region_window,
+            .window_id = ids.window,
+            .kind = .bounding,
+        });
+        try x_request_connection.send(&message_buffer);
+    }
+
+    // Track damage on the window so we can repaint it.
+    //
+    // We need to create Damage resources with the event connection because they have
+    // coupled creating the Damage object with tracking the DamageNotify events.
+    const damage_window = event_connection_id_generator.generateMonotonicId();
+    {
+        var message_buffer: [x.damage.create.len]u8 = undefined;
+        x.damage.create.serialize(&message_buffer, .{
+            .ext_opcode = extensions.damage.opcode,
+            .damage_id = damage_window,
+            .drawable_id = ids.window,
+            // We only need to know when there is any damage to the window.
+            // as we're just going to repaint the whole window.
+            .report_level = .non_empty,
+        });
+        // XXX: Use the event connection so we get the DamageNotify events in the event loop
+        try x_event_connection.send(&message_buffer);
     }
 
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
@@ -359,7 +418,10 @@ pub fn main() !void {
     var render_context = render.RenderContext{
         .sock = &x_request_connection.socket,
         .ids = &ids,
-        .extensions = &extensions,
+        .extensions = &x11_extension_utils.Extensions(&.{ .composite, .render }){
+            .composite = extensions.composite,
+            .render = extensions.render,
+        },
         .state = &state,
     };
 
@@ -382,7 +444,21 @@ pub fn main() !void {
             const data = x_event_connection.buffer.nextReservedBuffer();
             if (data.len < 32)
                 break;
-            const msg_len = x.parseMsgLen(data[0..32].*);
+            const msg_len: u32 = switch (data[0] & 0x7f) {
+                // Let zigx figure out the message length for what it can
+                0...35 => x.parseMsgLen(data[0..32].*),
+                // But we have to figure out the message length for any extensions
+                // because the format of the events is specific to each extension.
+                else => |t| blk: {
+                    // The damage extension only defines one event type: `damage_notify`
+                    const damage_notify = damage_extension.base_event_code;
+                    if (t == damage_notify) {
+                        break :blk @sizeOf(x.damage.DamageNotifyEvent);
+                    }
+
+                    std.debug.panic("We currently do not handle reply type {}", .{t});
+                },
+            };
             if (data.len < msg_len)
                 break;
             x_event_connection.buffer.release(msg_len);
@@ -429,7 +505,7 @@ pub fn main() !void {
                     // be reinvoked for the client to continue to refer to the storage
                     // holding the current window contents
 
-                    const window_picture_id = request_id_generator.generateMonotonicId();
+                    const window_picture_id = request_connection_id_generator.generateMonotonicId();
                     try x_render_extension.createPictureForWindow(
                         x_request_connection,
                         window_picture_id,
@@ -461,6 +537,7 @@ pub fn main() !void {
                     // should have received a `create_notify` event before this.
                     const existing_window_entry = state.window_map.get(msg.window) orelse return error.ConfigureNotifyWindowNotFound;
 
+                    // Keep track of the new window position and size
                     try state.window_map.put(msg.window, .{
                         .window_id = msg.window,
                         .visible = existing_window_entry.visible,
@@ -470,7 +547,8 @@ pub fn main() !void {
                         .height = msg.height,
                     });
 
-                    const region_id = request_id_generator.generateMonotonicId();
+                    // Add the window to the damage region
+                    const region_id = request_connection_id_generator.generateMonotonicId();
                     {
                         var request_message: [x.fixes.create_region_from_window.len]u8 = undefined;
                         x.fixes.create_region_from_window.serialize(&request_message, .{
@@ -495,6 +573,14 @@ pub fn main() !void {
                 },
                 .circulate_notify => |msg| {
                     std.log.info("TODO: circulate_notify: {}", .{msg});
+                },
+                .unhandled => |msg| {
+                    const damage_notify = damage_extension.base_event_code;
+                    if (@intFromEnum(msg.kind) == damage_notify) {
+                        const damage_notify_msg: *x.damage.DamageNotifyEvent = @ptrCast(msg);
+                        std.log.info("damage_notify: {}", .{damage_notify_msg});
+                    }
+                    std.log.info("unhandled event: {}", .{msg});
                 },
                 else => |msg| {
                     // did not register for these

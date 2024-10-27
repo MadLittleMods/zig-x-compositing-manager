@@ -38,6 +38,11 @@ pub const Ids = struct {
     overlay_window_id: u32,
 
     /// The drawable ID of our window
+    ///
+    /// Since the `overlay_window_id` isn't necessarily a 32-bit depth window (with alpha
+    /// transparency support), we're going to create our own window with 32-bit depth
+    /// with the same dimensions as overlay/root with the `overlay_window_id` as the
+    /// parent.
     window: u32 = 0,
 
     colormap: u32 = 0,
@@ -51,6 +56,9 @@ pub const Ids = struct {
     // We need to create a "picture" version of every drawable for use with the X Render
     // extension.
     picture_window: u32 = 0,
+
+    // We need a X Fixes "region" ID for the window to interact with the X Damage API's
+    region_window: u32 = 0,
 
     pub fn init(root: u32, overlay_window_id: u32, id_generator: *IdGenerator) @This() {
         var ids = Ids{
@@ -76,7 +84,7 @@ pub fn createResources(
     x_connection: common.XConnection,
     ids: *const Ids,
     screen: *align(4) x.Screen,
-    extensions: *const x11_extension_utils.Extensions(&.{ .composite, .shape, .render }),
+    extensions: *const x11_extension_utils.Extensions(&.{ .composite, .render }),
     depth: u8,
     state: *const AppState,
 ) !void {
@@ -105,9 +113,10 @@ pub fn createResources(
         try x_connection.send(&message_buffer);
     }
 
-    // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
-    // going to create our own window with 32-bit depth with the same dimensions as
-    // overlay/root with the `overlay_window_id` as the parent.
+    // Since the `overlay_window_id` isn't necessarily a 32-bit depth window (with alpha
+    // transparency support), we're going to create our own window with 32-bit depth
+    // with the same dimensions as overlay/root with the `overlay_window_id` as the
+    // parent.
     {
         std.log.debug("Creating window_id {0} 0x{0x}", .{ids.window});
 
@@ -278,7 +287,7 @@ pub fn cleanupResources(
 pub const RenderContext = struct {
     sock: *const std.os.socket_t,
     ids: *const Ids,
-    extensions: *const x11_extension_utils.Extensions(&.{ .composite, .shape, .render }),
+    extensions: *const x11_extension_utils.Extensions(&.{ .composite, .render }),
     state: *const AppState,
 
     /// Renders the UI to our window.
