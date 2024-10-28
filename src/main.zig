@@ -1,4 +1,6 @@
 const std = @import("std");
+const assertions = @import("utils/assertions.zig");
+const assert = assertions.assert;
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const render = @import("compositing_manager/render.zig");
@@ -375,37 +377,6 @@ pub fn main() !void {
         try x_event_connection.send(message_buffer[0..len]);
     }
 
-    // Create a X Fixes region for the window to interact with the X Damage API's
-    {
-        var message_buffer: [x.fixes.create_region_from_window.len]u8 = undefined;
-        x.fixes.create_region_from_window.serialize(&message_buffer, .{
-            .ext_opcode = extensions.fixes.opcode,
-            .region_id = ids.region_window,
-            .window_id = ids.window,
-            .kind = .bounding,
-        });
-        try x_request_connection.send(&message_buffer);
-    }
-
-    // Track damage on the window so we can repaint it.
-    //
-    // We need to create Damage resources with the event connection because they have
-    // coupled creating the Damage object with tracking the DamageNotify events.
-    const damage_window = event_connection_id_generator.generateMonotonicId();
-    {
-        var message_buffer: [x.damage.create.len]u8 = undefined;
-        x.damage.create.serialize(&message_buffer, .{
-            .ext_opcode = extensions.damage.opcode,
-            .damage_id = damage_window,
-            .drawable_id = ids.window,
-            // We only need to know when there is any damage to the window.
-            // as we're just going to repaint the whole window.
-            .report_level = .non_empty,
-        });
-        // XXX: Use the event connection so we get the DamageNotify events in the event loop
-        try x_event_connection.send(&message_buffer);
-    }
-
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
     // window is called unmapping. When windows are initially created, they are unmapped
     // (or hidden).
@@ -491,6 +462,25 @@ pub fn main() !void {
                         .width = msg.width,
                         .height = msg.height,
                     });
+
+                    // Track damage on the window so we can repaint it.
+                    //
+                    // We need to create Damage resources with the event connection because the API
+                    // couples creating the Damage object with tracking the DamageNotify events.
+                    const damage_id = event_connection_id_generator.generateMonotonicId();
+                    {
+                        var message_buffer: [x.damage.create.len]u8 = undefined;
+                        x.damage.create.serialize(&message_buffer, .{
+                            .ext_opcode = extensions.damage.opcode,
+                            .damage_id = damage_id,
+                            .drawable_id = msg.window_id,
+                            // We only need to know when there is any damage to the window.
+                            // as we're just going to repaint the whole window.
+                            .report_level = .non_empty,
+                        });
+                        // XXX: Use the event connection so we get the DamageNotify events in the event loop
+                        try x_event_connection.send(&message_buffer);
+                    }
                 },
                 .destroy_notify => |msg| {
                     std.log.info("destroy_notify: {}", .{msg});
@@ -504,6 +494,21 @@ pub fn main() !void {
                     // each time it is mapped or resized, so this request will need to
                     // be reinvoked for the client to continue to refer to the storage
                     // holding the current window contents
+
+                    // We expect an entry to already be in the `window_map` because we
+                    // should have received a `create_notify` event before this.
+                    const existing_window_entry = state.window_map.get(msg.window) orelse return error.ConfigureNotifyWindowNotFound;
+
+                    // Keep track of the new window visibility
+                    try state.window_map.put(msg.window, .{
+                        .window_id = msg.window,
+                        // Window is now visible
+                        .visible = true,
+                        .x = existing_window_entry.x,
+                        .y = existing_window_entry.y,
+                        .width = existing_window_entry.width,
+                        .height = existing_window_entry.height,
+                    });
 
                     const window_picture_id = request_connection_id_generator.generateMonotonicId();
                     try x_render_extension.createPictureForWindow(
@@ -521,6 +526,21 @@ pub fn main() !void {
                 },
                 .unmap_notify => |msg| {
                     std.log.info("unmap_notify: {}", .{msg});
+
+                    // We expect an entry to already be in the `window_map` because we
+                    // should have received a `create_notify` event before this.
+                    const existing_window_entry = state.window_map.get(msg.target_window_id) orelse return error.ConfigureNotifyWindowNotFound;
+
+                    // Keep track of the new window visibility
+                    try state.window_map.put(msg.target_window_id, .{
+                        .window_id = msg.target_window_id,
+                        // Window is now hidden
+                        .visible = false,
+                        .x = existing_window_entry.x,
+                        .y = existing_window_entry.y,
+                        .width = existing_window_entry.width,
+                        .height = existing_window_entry.height,
+                    });
 
                     // Render after a window is hidden
                     try render_context.render();
@@ -575,12 +595,31 @@ pub fn main() !void {
                     std.log.info("TODO: circulate_notify: {}", .{msg});
                 },
                 .unhandled => |msg| {
+                    // Handle damage notifications
                     const damage_notify = damage_extension.base_event_code;
                     if (@intFromEnum(msg.kind) == damage_notify) {
                         const damage_notify_msg: *x.damage.DamageNotifyEvent = @ptrCast(msg);
                         std.log.info("damage_notify: {}", .{damage_notify_msg});
+
+                        // Render after a region is damaged
+                        try render_context.render();
+
+                        // Subtract all the damage, repairing the window.
+                        {
+                            var message_buffer: [x.damage.subtract.len]u8 = undefined;
+                            x.damage.subtract.serialize(&message_buffer, .{
+                                .ext_opcode = extensions.damage.opcode,
+                                .damage_id = damage_notify_msg.damage_id,
+                                // None (0) - So everything is subtracted and repaired
+                                .repair_region_id = 0,
+                                // None (0) - (this is an output parameter) and we don't care about what was repaired
+                                .parts_region_id = 0,
+                            });
+                            try x_request_connection.send(&message_buffer);
+                        }
+                    } else {
+                        std.log.info("unhandled event: {}", .{msg});
                     }
-                    std.log.info("unhandled event: {}", .{msg});
                 },
                 else => |msg| {
                     // did not register for these
