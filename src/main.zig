@@ -290,11 +290,13 @@ pub fn main() !void {
     defer window_map.deinit();
     var window_to_picture_id_map = std.AutoHashMap(u32, u32).init(allocator);
     var window_to_region_id_map = std.AutoHashMap(u32, u32).init(allocator);
+    var window_stacking_order = app_state.StackingOrder.init(screen.root, allocator);
     const state = app_state.AppState{
         .root_screen_dimensions = root_screen_dimensions,
         .window_map = &window_map,
         .window_to_picture_id_map = &window_to_picture_id_map,
         .window_to_region_id_map = &window_to_region_id_map,
+        .window_stacking_order = &window_stacking_order,
     };
 
     // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
@@ -463,6 +465,9 @@ pub fn main() !void {
                         .height = msg.height,
                     });
 
+                    // "The window is placed on top in the stacking order with respect to siblings."
+                    try state.window_stacking_order.append_child(msg.window_id);
+
                     // Track damage on the window so we can repaint it.
                     //
                     // We need to create Damage resources with the event connection because the API
@@ -547,10 +552,14 @@ pub fn main() !void {
                 },
                 .reparent_notify => |msg| {
                     std.log.info("TODO: reparent_notify: {}", .{msg});
+
+                    // TODO: Take stacking order change into account
+                    // TODO: "The window is placed on top in the stacking order with respect to siblings."
                 },
                 .configure_notify => |msg| {
                     std.log.info("configure_notify: {}", .{msg});
 
+                    // TODO: Take stacking order change into account
                     // TODO: Take `msg.above_sibling` into account
 
                     // We expect an entry to already be in the `window_map` because we
@@ -593,6 +602,8 @@ pub fn main() !void {
                 },
                 .circulate_notify => |msg| {
                     std.log.info("TODO: circulate_notify: {}", .{msg});
+
+                    // TODO: Take stacking order change into account
                 },
                 .unhandled => |msg| {
                     // Handle damage notifications
