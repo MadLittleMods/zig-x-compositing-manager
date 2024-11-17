@@ -294,35 +294,38 @@ pub const RenderContext = struct {
     pub fn render(self: *const @This()) !void {
         const sock = self.sock.*;
 
-        var window_map_iterator = self.state.window_map.iterator();
-        while (window_map_iterator.next()) |window_entry| {
-            const window_id = window_entry.key_ptr.*;
-            const window = window_entry.value_ptr;
-
-            const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
-            if (opt_picture_id) |picture_id| {
-                // We use the `x.render.composite` request to instead of `x.copy_area`
-                // because it supports copying from windows with differing depths and we
-                // want the alpha/transparency support which only `x.render.composite`
-                // can do.
-                var msg: [x.render.composite.len]u8 = undefined;
-                x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
-                    .picture_operation = .over,
-                    .src_picture_id = picture_id,
-                    .mask_picture_id = 0,
-                    .dst_picture_id = self.ids.picture_window,
-                    .src_x = 0,
-                    .src_y = 0,
-                    .mask_x = 0,
-                    .mask_y = 0,
-                    .dst_x = window.x,
-                    .dst_y = window.y,
-                    .width = window.width,
-                    .height = window.height,
-                });
-                try common.send(sock, &msg);
+        var window_stacking_order_iterator = self.state.window_stacking_order.iterator();
+        while (window_stacking_order_iterator.next()) |window_stacking_order| {
+            const window_id = window_stacking_order.window_id;
+            if (self.state.window_map.get(window_id)) |window| {
+                const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
+                if (opt_picture_id) |picture_id| {
+                    // We use the `x.render.composite` request to instead of `x.copy_area`
+                    // because it supports copying from windows with differing depths and we
+                    // want the alpha/transparency support which only `x.render.composite`
+                    // can do.
+                    var msg: [x.render.composite.len]u8 = undefined;
+                    x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
+                        .picture_operation = .over,
+                        .src_picture_id = picture_id,
+                        .mask_picture_id = 0,
+                        .dst_picture_id = self.ids.picture_window,
+                        .src_x = 0,
+                        .src_y = 0,
+                        .mask_x = 0,
+                        .mask_y = 0,
+                        .dst_x = window.x,
+                        .dst_y = window.y,
+                        .width = window.width,
+                        .height = window.height,
+                    });
+                    try common.send(sock, &msg);
+                } else {
+                    std.log.err("No picture ID found for window_id {}", .{window_id});
+                    continue;
+                }
             } else {
-                std.log.err("No picture ID found for window_id {}", .{window_id});
+                std.log.err("No window found for window_id {}", .{window_id});
                 continue;
             }
         }

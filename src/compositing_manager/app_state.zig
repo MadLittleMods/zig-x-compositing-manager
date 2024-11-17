@@ -16,8 +16,11 @@ pub const Window = struct {
 /// Since each window can have any number of children, we use a recursive data structure
 /// where each window can have it's own StackingOrder context with more children.
 pub const StackingOrder = struct {
+    /// The window ID of the parent window
     window_id: u32,
-    /// Bottom-to-top stacking order of windows (DoublyLinkedList)
+    /// Bottom-to-top stacking order of child windows (DoublyLinkedList)
+    // Bottom-to-top order allows us to iterate through the list to draw the windows in
+    // the correct order.
     children: std.TailQueue(*StackingOrder),
     allocator: std.mem.Allocator,
 
@@ -60,6 +63,29 @@ pub const StackingOrder = struct {
 
         self.children.append(node);
     }
+
+    /// Return an iterator that walks the stacking order (bottom-to-top) without
+    /// consuming it. Invalidated if the heap is modified.
+    ///
+    /// Bottom-to-top order allows us to iterate through the list to draw the windows in
+    /// the correct order.
+    pub fn iterator(self: *StackingOrder) BottomToTopStackingOrderIterator {
+        return .{ .current_node = self.children.first };
+    }
+
+    pub const BottomToTopStackingOrderIterator = struct {
+        current_node: ?*std.TailQueue(*StackingOrder).Node,
+
+        pub fn next(self: *BottomToTopStackingOrderIterator) ?*StackingOrder {
+            if (self.current_node) |current_node| {
+                const data = current_node.data;
+                self.current_node = current_node.next;
+                return data;
+            }
+
+            return null;
+        }
+    };
 };
 
 /// Holds the overall state of the application. In an ideal world, this would be
@@ -75,7 +101,5 @@ pub const AppState = struct {
     /// window_id -> region_id
     window_to_region_id_map: *std.AutoHashMap(u32, u32),
     /// Bottom-to-top stacking order of windows (DoublyLinkedList)
-    // Bottom-to-top order allows us to iterate through the list to draw the windows in
-    // the correct order.
     window_stacking_order: *StackingOrder,
 };
