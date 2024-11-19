@@ -103,7 +103,14 @@ pub const StackingOrder = struct {
             // If we haven't started processing this context's children yet
             if (self.child_node == null) {
                 // Start with the first child
-                self.child_node = current.children.first;
+                if (current.children.first) |first_child| {
+                    self.child_node = first_child;
+                } else {
+                    // If there are no children, we're done. The next iteration of the
+                    // loop will return null.
+                    self.current = null;
+                }
+
                 // Return the current node before processing children
                 return current;
             }
@@ -169,6 +176,7 @@ pub const StackingOrder = struct {
     };
 };
 
+/// Test utiltity function for `BottomToTopStackingOrderIterator`
 fn testIterator(
     it: *StackingOrder.BottomToTopStackingOrderIterator,
     expected_order: []const u32,
@@ -225,6 +233,19 @@ test "StackingOrder bottom-to-top iterator" {
     try testIterator(
         &it,
         &[_]u32{ 0, 1, 10, 100, 101, 11, 12, 2, 20, 21, 22, 3, 30, 300 },
+        allocator,
+    );
+}
+
+test "StackingOrder bottom-to-top iterator (single item)" {
+    const allocator = std.testing.allocator;
+
+    var root_stacking_order = StackingOrder.init(0, null, allocator);
+
+    var it = root_stacking_order.iterator();
+    try testIterator(
+        &it,
+        &[_]u32{0},
         allocator,
     );
 }
