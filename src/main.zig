@@ -290,7 +290,7 @@ pub fn main() !void {
     defer window_map.deinit();
     var window_to_picture_id_map = std.AutoHashMap(u32, u32).init(allocator);
     var window_to_region_id_map = std.AutoHashMap(u32, u32).init(allocator);
-    var window_stacking_order = app_state.StackingOrder.init(screen.root, allocator);
+    var window_stacking_order = app_state.StackingOrder.init(screen.root, null, allocator);
     const state = app_state.AppState{
         .root_screen_dimensions = root_screen_dimensions,
         .window_map = &window_map,
@@ -466,7 +466,7 @@ pub fn main() !void {
                     });
 
                     // "The window is placed on top in the stacking order with respect to siblings."
-                    try state.window_stacking_order.append_child(msg.window_id);
+                    _ = try state.window_stacking_order.append_child(msg.window_id);
 
                     // Track damage on the window so we can repaint it.
                     //
@@ -640,6 +640,11 @@ pub fn main() !void {
             }
         }
     }
+}
+
+test {
+    // https://ziglang.org/documentation/master/#Nested-Container-Tests
+    @import("std").testing.refAllDecls(@This());
 }
 
 // This test is meant to run on a 300x300 display. Create a virtual display (via Xvfb
