@@ -204,7 +204,38 @@ fn testIterator(
     try std.testing.expectEqualSlices(u32, expected_order, actual_order);
 }
 
-test "StackingOrder bottom-to-top iterator" {
+test "StackingOrder bottom-to-top iterator (single item, no children)" {
+    const allocator = std.testing.allocator;
+
+    var root_stacking_order = StackingOrder.init(0, null, allocator);
+    defer root_stacking_order.deinit();
+
+    var it = root_stacking_order.iterator();
+    try testIterator(
+        &it,
+        &[_]u32{0},
+        allocator,
+    );
+}
+
+test "StackingOrder bottom-to-top iterator (flat list)" {
+    const allocator = std.testing.allocator;
+
+    var root_stacking_order = StackingOrder.init(0, null, allocator);
+    defer root_stacking_order.deinit();
+    _ = try root_stacking_order.append_child(1);
+    _ = try root_stacking_order.append_child(2);
+    _ = try root_stacking_order.append_child(3);
+
+    var it = root_stacking_order.iterator();
+    try testIterator(
+        &it,
+        &[_]u32{ 0, 1, 2, 3 },
+        allocator,
+    );
+}
+
+test "StackingOrder bottom-to-top iterator (nested children)" {
     const allocator = std.testing.allocator;
 
     var root_stacking_order = StackingOrder.init(0, null, allocator);
@@ -233,19 +264,6 @@ test "StackingOrder bottom-to-top iterator" {
     try testIterator(
         &it,
         &[_]u32{ 0, 1, 10, 100, 101, 11, 12, 2, 20, 21, 22, 3, 30, 300 },
-        allocator,
-    );
-}
-
-test "StackingOrder bottom-to-top iterator (single item)" {
-    const allocator = std.testing.allocator;
-
-    var root_stacking_order = StackingOrder.init(0, null, allocator);
-
-    var it = root_stacking_order.iterator();
-    try testIterator(
-        &it,
-        &[_]u32{0},
         allocator,
     );
 }
