@@ -89,15 +89,25 @@ pub const StackingOrder = struct {
         return child;
     }
 
+    const SiblingInsertionPosition = enum {
+        before,
+        after,
+    };
+
     /// Only searches the immediate children of the current StackingOrder
-    pub fn moveChildAfterSibling(
+    ///
+    /// When `siblings_window_id` is null, the window is inserted at the start or end of
+    /// the list according to the `position`.
+    pub fn moveChild(
         self: *StackingOrder,
-        sibling_window_id: u32,
         window_id: u32,
+        position: SiblingInsertionPosition,
+        sibling_window_id: ?u32,
     ) !void {
-        var it = self.children.first;
+        // Find what we need to work with
         var opt_window_node: ?*std.TailQueue(*StackingOrder).Node = null;
         var opt_sibling_node: ?*std.TailQueue(*StackingOrder).Node = null;
+        var it = self.children.first;
         while (it) |node| {
             if (node.data.window_id == window_id) {
                 opt_window_node = node;
@@ -114,8 +124,13 @@ pub const StackingOrder = struct {
 
         if (opt_window_node) |window_node| {
             if (opt_sibling_node) |sibling_node| {
+                // Remove the window from the current position
                 self.children.remove(window_node);
-                self.children.insertAfter(sibling_node, window_node);
+                // Insert the window at the new position
+                switch (position) {
+                    .before => self.children.insertBefore(sibling_node, window_node),
+                    .after => self.children.insertAfter(sibling_node, window_node),
+                }
             } else {
                 return error.SiblingWindowNotFound;
             }

@@ -290,13 +290,13 @@ pub fn main() !void {
     defer window_map.deinit();
     var window_to_picture_id_map = std.AutoHashMap(u32, u32).init(allocator);
     var window_to_region_id_map = std.AutoHashMap(u32, u32).init(allocator);
-    var window_stacking_order = app_state.StackingOrder.init(screen.root, null, allocator);
+    var root_window_stacking_order = app_state.StackingOrder.init(screen.root, null, allocator);
     const state = app_state.AppState{
         .root_screen_dimensions = root_screen_dimensions,
         .window_map = &window_map,
         .window_to_picture_id_map = &window_to_picture_id_map,
         .window_to_region_id_map = &window_to_region_id_map,
-        .window_stacking_order = &window_stacking_order,
+        .window_stacking_order = &root_window_stacking_order,
     };
 
     // Since the `overlay_window_id` isn't necessarily a 32-bit depth window, we're
@@ -556,7 +556,7 @@ pub fn main() !void {
                     // Find the parent in the `window_stacking_order`
                     const opt_parent_stacking_order = state.window_stacking_order.findWindowRecursive(msg.parent);
                     if (opt_parent_stacking_order) |parent_stacking_order| {
-                        // TODO: Remove the window from the old parent's stacking order
+                        // Remove the window from the old parent's stacking order
                         const opt_window_stacking_order = state.window_stacking_order.findWindowRecursive(msg.window);
                         if (opt_window_stacking_order) |window_stacking_order| {
                             if (window_stacking_order.parent_stacking_order) |old_parent_stacking_order| {
@@ -576,17 +576,16 @@ pub fn main() !void {
                 .configure_notify => |msg| {
                     std.log.info("configure_notify: {}", .{msg});
 
-                    // "If above-sibling is None, then the window is on the bottom of
-                    // the stack with respect to siblings. Otherwise, the window is
-                    // immediately on top of the specified sibling."
+                    // "The window is immediately on top of the specified sibling."
                     if (msg.above_sibling != 0) {
                         const above_sibling_window_id = msg.above_sibling;
                         // First find the sibling
                         const opt_above_sibling_stacking_order = state.window_stacking_order.findWindowRecursive(above_sibling_window_id);
                         if (opt_above_sibling_stacking_order) |above_sibling_stacking_order| {
                             if (above_sibling_stacking_order.parent_stacking_order) |parent_stacking_order| {
-                                try parent_stacking_order.moveChildAfterSibling(
+                                try parent_stacking_order.moveChild(
                                     above_sibling_stacking_order.window_id,
+                                    .after,
                                     msg.window,
                                 );
                             }
@@ -596,8 +595,16 @@ pub fn main() !void {
                                 msg.window,
                             });
                         }
-                    } else {
-                        _ = try state.window_stacking_order.prependChild(msg.window);
+                    }
+                    // "If above-sibling is None, then the window is on the bottom of
+                    // the stack with respect to siblings."
+                    else {
+                        const opt_window_stacking_order = state.window_stacking_order.findWindowRecursive(msg.window);
+                        if (opt_window_stacking_order) |window_stacking_order| {
+                            if (window_stacking_order.parent_stacking_order) |parent_stacking_order| {
+                                parent_stacking_order.moveChild(msg.window, .before, null);
+                            }
+                        }
                     }
 
                     // We expect an entry to already be in the `window_map` because we
