@@ -53,8 +53,8 @@ pub const StackingOrder = struct {
         }
     }
 
-    /// Insert a new node at the end of the list (top of the stacking order)
-    pub fn append_child(
+    /// Insert a new node at the end of the list (top of the stacking order of the siblings)
+    pub fn appendChild(
         self: *StackingOrder,
         window_id: u32,
     ) !*StackingOrder {
@@ -69,6 +69,83 @@ pub const StackingOrder = struct {
         self.children.append(node);
 
         return child;
+    }
+
+    /// Insert a new node at the start of the list (bottom of the stacking order of the siblings)
+    pub fn prependChild(
+        self: *StackingOrder,
+        window_id: u32,
+    ) !*StackingOrder {
+        // Create the new StackingOrder
+        var child = try self.allocator.create(StackingOrder);
+        child.* = StackingOrder.init(window_id, self, self.allocator);
+
+        // Create the queue node that will hold the pointer to the StackingOrder
+        var node = try self.allocator.create(std.TailQueue(*StackingOrder).Node);
+        node.* = .{ .data = child };
+
+        self.children.prepend(node);
+
+        return child;
+    }
+
+    /// Only searches the immediate children of the current StackingOrder
+    pub fn moveChildAfterSibling(
+        self: *StackingOrder,
+        sibling_window_id: u32,
+        window_id: u32,
+    ) !void {
+        var it = self.children.first;
+        var opt_window_node: ?*std.TailQueue(*StackingOrder).Node = null;
+        var opt_sibling_node: ?*std.TailQueue(*StackingOrder).Node = null;
+        while (it) |node| {
+            if (node.data.window_id == window_id) {
+                opt_window_node = node;
+            } else if (node.data.window_id == sibling_window_id) {
+                opt_sibling_node = node;
+            }
+
+            if (opt_window_node != null and opt_sibling_node != null) {
+                break;
+            }
+
+            it = node.next;
+        }
+
+        if (opt_window_node) |window_node| {
+            if (opt_sibling_node) |sibling_node| {
+                self.children.remove(window_node);
+                self.children.insertAfter(sibling_node, window_node);
+            } else {
+                return error.SiblingWindowNotFound;
+            }
+        } else {
+            return error.WindowNotFound;
+        }
+    }
+
+    /// Find a window by window_id in the StackingOrder hierarchy
+    pub fn findWindowRecursive(
+        self: *StackingOrder,
+        window_id: u32,
+    ) ?*StackingOrder {
+        var it = self.children.first;
+        while (it) |node| {
+            if (node.data.window_id == window_id) {
+                return node.data;
+            }
+
+            if (node.data.children.first) |child| {
+                const opt_found_stacking_order = child.data.findWindow(window_id);
+                if (opt_found_stacking_order) |found_stacking_order| {
+                    return found_stacking_order;
+                }
+            }
+
+            it = node.next;
+        }
+
+        return null;
     }
 
     /// Return an iterator that walks the stacking order (bottom-to-top) without
@@ -223,9 +300,9 @@ test "StackingOrder bottom-to-top iterator (flat list)" {
 
     var root_stacking_order = StackingOrder.init(0, null, allocator);
     defer root_stacking_order.deinit();
-    _ = try root_stacking_order.append_child(1);
-    _ = try root_stacking_order.append_child(2);
-    _ = try root_stacking_order.append_child(3);
+    _ = try root_stacking_order.appendChild(1);
+    _ = try root_stacking_order.appendChild(2);
+    _ = try root_stacking_order.appendChild(3);
 
     var it = root_stacking_order.iterator();
     try testIterator(
@@ -240,25 +317,25 @@ test "StackingOrder bottom-to-top iterator (nested children)" {
 
     var root_stacking_order = StackingOrder.init(0, null, allocator);
     defer root_stacking_order.deinit();
-    var one_stacking_order = try root_stacking_order.append_child(1);
-    var two_stacking_order = try root_stacking_order.append_child(2);
-    var three_stacking_order = try root_stacking_order.append_child(3);
+    var one_stacking_order = try root_stacking_order.appendChild(1);
+    var two_stacking_order = try root_stacking_order.appendChild(2);
+    var three_stacking_order = try root_stacking_order.appendChild(3);
 
-    _ = try two_stacking_order.append_child(20);
-    _ = try two_stacking_order.append_child(21);
+    _ = try two_stacking_order.appendChild(20);
+    _ = try two_stacking_order.appendChild(21);
 
-    var thirty_stacking_order = try three_stacking_order.append_child(30);
+    var thirty_stacking_order = try three_stacking_order.appendChild(30);
 
-    var ten_stacking_order = try one_stacking_order.append_child(10);
-    _ = try one_stacking_order.append_child(11);
+    var ten_stacking_order = try one_stacking_order.appendChild(10);
+    _ = try one_stacking_order.appendChild(11);
 
-    _ = try ten_stacking_order.append_child(100);
-    _ = try ten_stacking_order.append_child(101);
+    _ = try ten_stacking_order.appendChild(100);
+    _ = try ten_stacking_order.appendChild(101);
 
-    _ = try two_stacking_order.append_child(22);
-    _ = try one_stacking_order.append_child(12);
+    _ = try two_stacking_order.appendChild(22);
+    _ = try one_stacking_order.appendChild(12);
 
-    _ = try thirty_stacking_order.append_child(300);
+    _ = try thirty_stacking_order.appendChild(300);
 
     var it = root_stacking_order.iterator();
     try testIterator(

@@ -466,7 +466,7 @@ pub fn main() !void {
                     });
 
                     // "The window is placed on top in the stacking order with respect to siblings."
-                    _ = try state.window_stacking_order.append_child(msg.window_id);
+                    _ = try state.window_stacking_order.appendChild(msg.window_id);
 
                     // Track damage on the window so we can repaint it.
                     //
@@ -551,16 +551,54 @@ pub fn main() !void {
                     try render_context.render();
                 },
                 .reparent_notify => |msg| {
-                    std.log.info("TODO: reparent_notify: {}", .{msg});
+                    std.log.info("reparent_notify: {}", .{msg});
 
-                    // TODO: Take stacking order change into account
-                    // TODO: "The window is placed on top in the stacking order with respect to siblings."
+                    // Find the parent in the `window_stacking_order`
+                    const opt_parent_stacking_order = state.window_stacking_order.findWindowRecursive(msg.parent);
+                    if (opt_parent_stacking_order) |parent_stacking_order| {
+                        // TODO: Remove the window from the old parent's stacking order
+                        const opt_window_stacking_order = state.window_stacking_order.findWindowRecursive(msg.window);
+                        if (opt_window_stacking_order) |window_stacking_order| {
+                            if (window_stacking_order.parent_stacking_order) |old_parent_stacking_order| {
+                                _ = old_parent_stacking_order.children.removeChild(msg.window);
+                            }
+                        }
+
+                        // "The window is placed on top in the stacking order with respect to siblings."
+                        _ = try parent_stacking_order.appendChild(msg.window);
+                    } else {
+                        std.log.warn("Unable to find parent window ({d}) in stacking order hierarchy when trying to reparent {d}", .{
+                            msg.parent,
+                            msg.window,
+                        });
+                    }
                 },
                 .configure_notify => |msg| {
                     std.log.info("configure_notify: {}", .{msg});
 
-                    // TODO: Take stacking order change into account
-                    // TODO: Take `msg.above_sibling` into account
+                    // "If above-sibling is None, then the window is on the bottom of
+                    // the stack with respect to siblings. Otherwise, the window is
+                    // immediately on top of the specified sibling."
+                    if (msg.above_sibling != 0) {
+                        const above_sibling_window_id = msg.above_sibling;
+                        // First find the sibling
+                        const opt_above_sibling_stacking_order = state.window_stacking_order.findWindowRecursive(above_sibling_window_id);
+                        if (opt_above_sibling_stacking_order) |above_sibling_stacking_order| {
+                            if (above_sibling_stacking_order.parent_stacking_order) |parent_stacking_order| {
+                                try parent_stacking_order.moveChildAfterSibling(
+                                    above_sibling_stacking_order.window_id,
+                                    msg.window,
+                                );
+                            }
+                        } else {
+                            std.log.warn("Unable to find above_sibling_window_id ({d}) in stacking order hierarchy when trying to place window ({d}) above the sibling", .{
+                                above_sibling_window_id,
+                                msg.window,
+                            });
+                        }
+                    } else {
+                        _ = try state.window_stacking_order.prependChild(msg.window);
+                    }
 
                     // We expect an entry to already be in the `window_map` because we
                     // should have received a `create_notify` event before this.
