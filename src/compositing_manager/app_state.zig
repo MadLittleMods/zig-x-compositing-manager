@@ -10,6 +10,8 @@ pub const Window = struct {
     height: u16,
 };
 
+const WindowList = std.TailQueue(*StackingOrder);
+
 /// Holds the stacking order of windows.
 /// Bottom-to-top stacking order of windows (DoublyLinkedList)
 ///
@@ -21,7 +23,7 @@ pub const StackingOrder = struct {
     /// Bottom-to-top stacking order of child windows (DoublyLinkedList)
     // Bottom-to-top order allows us to iterate through the list to draw the windows in
     // the correct order.
-    children: std.TailQueue(*StackingOrder),
+    children: WindowList,
     /// The parent stacking context that this window belongs to. This is useful for the
     /// iterator to move back up the hierarchy when it reaches the end of a child list.
     parent_stacking_order: ?*StackingOrder,
@@ -53,8 +55,8 @@ pub const StackingOrder = struct {
         }
     }
 
-    /// Insert a new node at the end of the list (top of the stacking order of the siblings)
-    pub fn appendChild(
+    /// Insert a *new* node at the end of the list (top of the stacking order of the siblings)
+    pub fn appendNewChild(
         self: *StackingOrder,
         window_id: u32,
     ) !*StackingOrder {
@@ -71,8 +73,8 @@ pub const StackingOrder = struct {
         return child;
     }
 
-    /// Insert a new node at the start of the list (bottom of the stacking order of the siblings)
-    pub fn prependChild(
+    /// Insert a *new* node at the start of the list (bottom of the stacking order of the siblings)
+    pub fn prependNewChild(
         self: *StackingOrder,
         window_id: u32,
     ) !*StackingOrder {
@@ -89,54 +91,93 @@ pub const StackingOrder = struct {
         return child;
     }
 
+    /// Move this window to a new parent window.
+    ///
+    /// Removes the window from the current parent's children and appends it to the new
+    /// parent's children (top of the stacking order).
+    pub fn reparentChild(
+        self: *StackingOrder,
+        window_id: u32,
+        new_parent_window_id: u32,
+    ) !void {
+        // Find the window we're trying to move
+        const window_node = self.findLinkedListNodeByWindowIdRecursive(window_id) orelse return error.WindowNotFound;
+
+        // Remove the window from the current position
+        if (window_node.data.parent_stacking_order) |parent_stacking_order| {
+            parent_stacking_order.children.remove(window_node);
+        }
+
+        const new_parent_stacking_order = self.findWindowRecursive(new_parent_window_id) orelse return error.SiblingWindowNotFound;
+
+        // Places the window at the end of the new parent's children (top of the stacking order)
+        new_parent_stacking_order.children.append(window_node);
+    }
+
     const SiblingInsertionPosition = enum {
         before,
         after,
     };
 
-    /// Only searches the immediate children of the current StackingOrder
+    /// Searches rescursively in the StackingOrder
     ///
-    /// When `siblings_window_id` is null, the window is inserted at the start or end of
-    /// the list according to the `position`.
+    /// When `opt_sibling_window_id` is null, the window is inserted at the start or end
+    /// of its current StackingOrder according to the `position`.
     pub fn moveChild(
         self: *StackingOrder,
         window_id: u32,
         position: SiblingInsertionPosition,
-        sibling_window_id: ?u32,
+        opt_sibling_window_id: ?u32,
     ) !void {
-        // Find what we need to work with
-        var opt_window_node: ?*std.TailQueue(*StackingOrder).Node = null;
-        var opt_sibling_node: ?*std.TailQueue(*StackingOrder).Node = null;
+        // Find the window we're trying to move
+        const window_node = self.findLinkedListNodeByWindowIdRecursive(window_id) orelse return error.WindowNotFound;
+
+        // Remove the window from the current position
+        if (window_node.data.parent_stacking_order) |parent_stacking_order| {
+            parent_stacking_order.children.remove(window_node);
+        }
+
+        // Insert the window at the new position
+        if (opt_sibling_window_id) |sibling_window_id| {
+            const sibling_node = self.findLinkedListNodeByWindowIdRecursive(sibling_window_id) orelse return error.SiblingWindowNotFound;
+            const sibling_parent_node = sibling_node.data.parent_stacking_order orelse return error.SiblingWindowHasNoParent;
+
+            switch (position) {
+                .before => sibling_parent_node.children.insertBefore(sibling_node, window_node),
+                .after => sibling_parent_node.children.insertAfter(sibling_node, window_node),
+            }
+        } else {
+            const window_parent_node = window_node.data.parent_stacking_order orelse return error.WindowHasNoParent;
+
+            switch (position) {
+                .before => window_parent_node.children.prepend(window_node),
+                .after => window_parent_node.children.append(window_node),
+            }
+        }
+    }
+
+    /// Find a LinkedList node by window_id in the StackingOrder hierarchy
+    pub fn findLinkedListNodeByWindowIdRecursive(
+        self: *StackingOrder,
+        window_id: u32,
+    ) ?*WindowList.Node {
         var it = self.children.first;
         while (it) |node| {
             if (node.data.window_id == window_id) {
-                opt_window_node = node;
-            } else if (node.data.window_id == sibling_window_id) {
-                opt_sibling_node = node;
+                return node;
             }
 
-            if (opt_window_node != null and opt_sibling_node != null) {
-                break;
+            if (node.data.children.first) |child| {
+                const opt_found_stacking_order = child.data.findLinkedListNodeByWindowIdRecursive(window_id);
+                if (opt_found_stacking_order) |found_stacking_order| {
+                    return found_stacking_order;
+                }
             }
 
             it = node.next;
         }
 
-        if (opt_window_node) |window_node| {
-            if (opt_sibling_node) |sibling_node| {
-                // Remove the window from the current position
-                self.children.remove(window_node);
-                // Insert the window at the new position
-                switch (position) {
-                    .before => self.children.insertBefore(sibling_node, window_node),
-                    .after => self.children.insertAfter(sibling_node, window_node),
-                }
-            } else {
-                return error.SiblingWindowNotFound;
-            }
-        } else {
-            return error.WindowNotFound;
-        }
+        return null;
     }
 
     /// Find a window by window_id in the StackingOrder hierarchy
@@ -144,20 +185,10 @@ pub const StackingOrder = struct {
         self: *StackingOrder,
         window_id: u32,
     ) ?*StackingOrder {
-        var it = self.children.first;
-        while (it) |node| {
-            if (node.data.window_id == window_id) {
-                return node.data;
-            }
+        const opt_window_node = self.findLinkedListNodeByWindowIdRecursive(window_id);
 
-            if (node.data.children.first) |child| {
-                const opt_found_stacking_order = child.data.findWindow(window_id);
-                if (opt_found_stacking_order) |found_stacking_order| {
-                    return found_stacking_order;
-                }
-            }
-
-            it = node.next;
+        if (opt_window_node) |window_node| {
+            return window_node.data;
         }
 
         return null;
@@ -315,9 +346,9 @@ test "StackingOrder bottom-to-top iterator (flat list)" {
 
     var root_stacking_order = StackingOrder.init(0, null, allocator);
     defer root_stacking_order.deinit();
-    _ = try root_stacking_order.appendChild(1);
-    _ = try root_stacking_order.appendChild(2);
-    _ = try root_stacking_order.appendChild(3);
+    _ = try root_stacking_order.appendNewChild(1);
+    _ = try root_stacking_order.appendNewChild(2);
+    _ = try root_stacking_order.appendNewChild(3);
 
     var it = root_stacking_order.iterator();
     try testIterator(
@@ -332,25 +363,25 @@ test "StackingOrder bottom-to-top iterator (nested children)" {
 
     var root_stacking_order = StackingOrder.init(0, null, allocator);
     defer root_stacking_order.deinit();
-    var one_stacking_order = try root_stacking_order.appendChild(1);
-    var two_stacking_order = try root_stacking_order.appendChild(2);
-    var three_stacking_order = try root_stacking_order.appendChild(3);
+    var one_stacking_order = try root_stacking_order.appendNewChild(1);
+    var two_stacking_order = try root_stacking_order.appendNewChild(2);
+    var three_stacking_order = try root_stacking_order.appendNewChild(3);
 
-    _ = try two_stacking_order.appendChild(20);
-    _ = try two_stacking_order.appendChild(21);
+    _ = try two_stacking_order.appendNewChild(20);
+    _ = try two_stacking_order.appendNewChild(21);
 
-    var thirty_stacking_order = try three_stacking_order.appendChild(30);
+    var thirty_stacking_order = try three_stacking_order.appendNewChild(30);
 
-    var ten_stacking_order = try one_stacking_order.appendChild(10);
-    _ = try one_stacking_order.appendChild(11);
+    var ten_stacking_order = try one_stacking_order.appendNewChild(10);
+    _ = try one_stacking_order.appendNewChild(11);
 
-    _ = try ten_stacking_order.appendChild(100);
-    _ = try ten_stacking_order.appendChild(101);
+    _ = try ten_stacking_order.appendNewChild(100);
+    _ = try ten_stacking_order.appendNewChild(101);
 
-    _ = try two_stacking_order.appendChild(22);
-    _ = try one_stacking_order.appendChild(12);
+    _ = try two_stacking_order.appendNewChild(22);
+    _ = try one_stacking_order.appendNewChild(12);
 
-    _ = try thirty_stacking_order.appendChild(300);
+    _ = try thirty_stacking_order.appendNewChild(300);
 
     var it = root_stacking_order.iterator();
     try testIterator(

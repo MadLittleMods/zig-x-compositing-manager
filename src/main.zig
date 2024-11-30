@@ -466,7 +466,7 @@ pub fn main() !void {
                     });
 
                     // "The window is placed on top in the stacking order with respect to siblings."
-                    _ = try state.window_stacking_order.appendChild(msg.window_id);
+                    _ = try state.window_stacking_order.appendNewChild(msg.window_id);
 
                     // Track damage on the window so we can repaint it.
                     //
@@ -553,25 +553,8 @@ pub fn main() !void {
                 .reparent_notify => |msg| {
                     std.log.info("reparent_notify: {}", .{msg});
 
-                    // Find the parent in the `window_stacking_order`
-                    const opt_parent_stacking_order = state.window_stacking_order.findWindowRecursive(msg.parent);
-                    if (opt_parent_stacking_order) |parent_stacking_order| {
-                        // Remove the window from the old parent's stacking order
-                        const opt_window_stacking_order = state.window_stacking_order.findWindowRecursive(msg.window);
-                        if (opt_window_stacking_order) |window_stacking_order| {
-                            if (window_stacking_order.parent_stacking_order) |old_parent_stacking_order| {
-                                _ = old_parent_stacking_order.children.removeChild(msg.window);
-                            }
-                        }
-
-                        // "The window is placed on top in the stacking order with respect to siblings."
-                        _ = try parent_stacking_order.appendChild(msg.window);
-                    } else {
-                        std.log.warn("Unable to find parent window ({d}) in stacking order hierarchy when trying to reparent {d}", .{
-                            msg.parent,
-                            msg.window,
-                        });
-                    }
+                    // "The window is placed on top in the stacking order with respect to siblings."
+                    try state.window_stacking_order.reparentChild(msg.window, msg.parent);
                 },
                 .configure_notify => |msg| {
                     std.log.info("configure_notify: {}", .{msg});
@@ -579,32 +562,16 @@ pub fn main() !void {
                     // "The window is immediately on top of the specified sibling."
                     if (msg.above_sibling != 0) {
                         const above_sibling_window_id = msg.above_sibling;
-                        // First find the sibling
-                        const opt_above_sibling_stacking_order = state.window_stacking_order.findWindowRecursive(above_sibling_window_id);
-                        if (opt_above_sibling_stacking_order) |above_sibling_stacking_order| {
-                            if (above_sibling_stacking_order.parent_stacking_order) |parent_stacking_order| {
-                                try parent_stacking_order.moveChild(
-                                    above_sibling_stacking_order.window_id,
-                                    .after,
-                                    msg.window,
-                                );
-                            }
-                        } else {
-                            std.log.warn("Unable to find above_sibling_window_id ({d}) in stacking order hierarchy when trying to place window ({d}) above the sibling", .{
-                                above_sibling_window_id,
-                                msg.window,
-                            });
-                        }
+                        try state.window_stacking_order.moveChild(
+                            msg.window,
+                            .after,
+                            above_sibling_window_id,
+                        );
                     }
                     // "If above-sibling is None, then the window is on the bottom of
                     // the stack with respect to siblings."
                     else {
-                        const opt_window_stacking_order = state.window_stacking_order.findWindowRecursive(msg.window);
-                        if (opt_window_stacking_order) |window_stacking_order| {
-                            if (window_stacking_order.parent_stacking_order) |parent_stacking_order| {
-                                parent_stacking_order.moveChild(msg.window, .before, null);
-                            }
-                        }
+                        try state.window_stacking_order.moveChild(msg.window, .before, null);
                     }
 
                     // We expect an entry to already be in the `window_map` because we
@@ -646,9 +613,16 @@ pub fn main() !void {
                     try render_context.render();
                 },
                 .circulate_notify => |msg| {
-                    std.log.info("TODO: circulate_notify: {}", .{msg});
+                    std.log.info("circulate_notify: {}", .{msg});
 
-                    // TODO: Take stacking order change into account
+                    // Circulate the window in the stacking order
+                    try state.window_stacking_order.moveChild(msg.target_window_id, switch (msg.place) {
+                        // 0 -> Top
+                        0 => .after,
+                        // 1 -> Bottom
+                        1 => .before,
+                        else => return error.UnexpectedCirculateNotifyPlaceValue,
+                    }, null);
                 },
                 .unhandled => |msg| {
                     // Handle damage notifications
