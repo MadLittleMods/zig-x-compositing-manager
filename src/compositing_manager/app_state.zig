@@ -108,10 +108,10 @@ pub const StackingOrder = struct {
             parent_stacking_order.children.remove(window_node);
         }
 
-        const new_parent_stacking_order = self.findWindowRecursive(new_parent_window_id) orelse return error.SiblingWindowNotFound;
+        const new_parent_node = self.findLinkedListNodeByWindowIdRecursive(new_parent_window_id) orelse return error.SiblingWindowNotFound;
 
         // Places the window at the end of the new parent's children (top of the stacking order)
-        new_parent_stacking_order.children.append(window_node);
+        new_parent_node.data.children.append(window_node);
     }
 
     const SiblingInsertionPosition = enum {
@@ -175,20 +175,6 @@ pub const StackingOrder = struct {
             }
 
             it = node.next;
-        }
-
-        return null;
-    }
-
-    /// Find a window by window_id in the StackingOrder hierarchy
-    pub fn findWindowRecursive(
-        self: *StackingOrder,
-        window_id: u32,
-    ) ?*StackingOrder {
-        const opt_window_node = self.findLinkedListNodeByWindowIdRecursive(window_id);
-
-        if (opt_window_node) |window_node| {
-            return window_node.data;
         }
 
         return null;
