@@ -53,6 +53,10 @@ pub const StackingOrder = struct {
             // Move to the next node in the linked list
             it = next;
         }
+
+        // This isn't strictly necessary but it marks the memory as dirty (010101...) in
+        // safe modes (https://zig.news/kristoff/what-s-undefined-in-zig-9h)
+        self.* = undefined;
     }
 
     /// Insert a *new* node at the end of the list (top of the stacking order of the siblings)
@@ -158,6 +162,25 @@ pub const StackingOrder = struct {
                 .after => window_parent_node.children.append(window_node),
             }
         }
+    }
+
+    /// Remove a window from the StackingOrder hierarchy and clean up the memory.
+    pub fn removeChild(
+        self: *StackingOrder,
+        window_id: u32,
+    ) !void {
+        // Find the window we're trying to remove
+        const window_node = self.findLinkedListNodeByWindowIdRecursive(window_id) orelse return error.WindowNotFound;
+
+        // Remove the window from the current position
+        if (window_node.data.parent_stacking_order) |parent_stacking_order| {
+            parent_stacking_order.children.remove(window_node);
+        }
+
+        // Clean up the memory for the StackingOrder and the Node
+        window_node.data.deinit();
+        self.allocator.destroy(window_node.data);
+        self.allocator.destroy(window_node);
     }
 
     /// Find a LinkedList node by window_id in the StackingOrder hierarchy

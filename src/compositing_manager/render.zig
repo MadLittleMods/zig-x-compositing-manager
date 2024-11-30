@@ -295,6 +295,9 @@ pub const RenderContext = struct {
         const sock = self.sock.*;
 
         var window_stacking_order_iterator = self.state.window_stacking_order.iterator();
+        // Skip the first window because it's the root window and we don't render that
+        _ = window_stacking_order_iterator.next();
+        // Iterate over the rest of the windows and render them
         while (window_stacking_order_iterator.next()) |window_stacking_order| {
             const window_id = window_stacking_order.window_id;
             if (self.state.window_map.get(window_id)) |window| {
@@ -321,11 +324,11 @@ pub const RenderContext = struct {
                     });
                     try common.send(sock, &msg);
                 } else {
-                    std.log.err("No picture ID found for window_id {}", .{window_id});
+                    std.log.err("No `picture_id` found for `window_id` ({}) while iterating over the `window_stacking_order` and rendering", .{window_id});
                     continue;
                 }
             } else {
-                std.log.err("No window found for window_id {}", .{window_id});
+                std.log.err("No window found for `window_id` ({}) that was in the `window_stacking_order`", .{window_id});
                 continue;
             }
         }

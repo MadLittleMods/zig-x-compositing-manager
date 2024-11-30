@@ -489,8 +489,25 @@ pub fn main() !void {
                 },
                 .destroy_notify => |msg| {
                     std.log.info("destroy_notify: {}", .{msg});
-                    _ = state.window_map.remove(msg.target_window_id);
+
                     _ = state.window_to_picture_id_map.remove(msg.target_window_id);
+
+                    try state.window_stacking_order.removeChild(msg.target_window_id);
+
+                    const opt_region_id = state.window_to_region_id_map.get(msg.target_window_id);
+                    if (opt_region_id) |region_id| {
+                        var request_message: [x.fixes.destroy_region.len]u8 = undefined;
+                        x.fixes.destroy_region.serialize(&request_message, .{
+                            .ext_opcode = fixes_extension.opcode,
+                            .region_id = region_id,
+                        });
+                        try x_request_connection.send(&request_message);
+
+                        _ = state.window_to_region_id_map.remove(msg.target_window_id);
+                    }
+
+                    // Remove this last in case other things need it during clean-up
+                    _ = state.window_map.remove(msg.target_window_id);
                 },
                 .map_notify => |msg| {
                     std.log.info("map_notify: {}", .{msg});
