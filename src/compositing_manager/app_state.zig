@@ -91,10 +91,12 @@ pub const StackingOrder = struct {
         return child;
     }
 
-    /// Move this window to a new parent window.
+    /// Move this window under a new parent window.
     ///
-    /// Removes the window from the current parent's children and appends it to the new
+    /// Removes the window from its current parent's children and appends it to the new
     /// parent's children (top of the stacking order).
+    ///
+    /// Searches rescursively in the StackingOrder for the given window ID's.
     pub fn reparentChild(
         self: *StackingOrder,
         window_id: u32,
@@ -119,10 +121,12 @@ pub const StackingOrder = struct {
         after,
     };
 
-    /// Searches rescursively in the StackingOrder
+    /// Move a window relative to another sibling window.
     ///
     /// When `opt_sibling_window_id` is null, the window is inserted at the start or end
     /// of its current StackingOrder according to the `position`.
+    ///
+    /// Searches rescursively in the StackingOrder for the given window ID's.
     pub fn moveChild(
         self: *StackingOrder,
         window_id: u32,
