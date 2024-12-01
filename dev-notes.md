@@ -72,3 +72,80 @@ Other window manager examples:
       color depth. Then you can run `DISPLAY=:99 firefox` to run Firefox on that display.
     - `Xephyr :99 +extension COMPOSITE -screen 300x300x24` Create a new display with the
       composite extension enabled.
+
+
+### Using `Xephyr`
+
+(run these commands in separate terminals or put them in the background with `&`)
+```sh
+# Create a new display with Xephyr
+Xephyr :99 -screen 1920x1080x24
+
+# Start an application in the new display
+DISPLAY=:99 firefox
+```
+
+The Xephyr source code (git repo) is in the `xserver` repository in the
+[`hw/kdrive/xephyr`
+directory](https://gitlab.freedesktop.org/xorg/xserver/-/tree/master/hw/kdrive/ephyr).
+
+#### Cursor is not visible in Xephyr window
+
+All of the relevant flags you would think would do something don't work to get a cursor
+showing up by default.
+
+Examples of flags that do not work:
+```
+Xephyr :99 -screen 1920x1080x24 -sw-cursor -softCursor
+Xephyr :99 -screen 1920x1080x24 -host-cursor
+```
+
+The only flag that seems to make the cursor always visible is `-retro`. This makes the
+background tile (`party_like_its_1989`) and makes the cursor visible by default. As far
+as I can tell and skimming the code, it doesn't have any other side-effects so it
+definately seems worth using instead of worrying about creating your own cursors.
+
+```
+Xephyr :99 -screen 1920x1080x24 -retro
+```
+
+The default cursor is a small "x" from the `cursor` font at glyph index `0` and `1`. You
+can see how this is created for Xephyr in the
+[`CreateRootCursor(...)`](https://gitlab.freedesktop.org/xorg/xserver/-/blob/d98b36461a142f451a509e52f3faa98baea12ccd/dix/cursor.c#L481-517)
+function. X11 requests:
+[`OpenFont`](https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#requests:OpenFont)
+->
+[`CreateGlyphCursor`](https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#requests:CreateGlyphCursor).
+I first came across the "x" cursor from a [ffmpeg recording using
+`x11grab`](https://github.com/MadLittleMods/fps-aim-analyzer/pull/10).
+
+![Xephyr running with the `-retro` flag. The "x" in the middle is the default cursor](https://github.com/user-attachments/assets/f4d25cf7-bece-48fe-a68f-38c9cb707949)
+
+
+Relevant links:
+
+ - https://bugs.freedesktop.org/show_bug.cgi?id=69388
+ - https://lists.x.org/archives/xorg-devel/2013-September/037801.html
+
+As far as I can tell, normally, your window manager would set a default cursor on the
+root window during a
+[`CreateWindow`](https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#requests:CreateWindow)
+or
+[`ChangeWindowAttributes`](https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#requests:ChangeWindowAttributes)
+request. Then any child application windows just specify `cursor: None` to inherit their
+parents cursor. Any other cursors that an application uses would be created with
+[`CreateCursor`](https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#requests:CreateCursor).
+
+For example, with the `galculator` application (just a small example program for
+illustration), the only cursor it creates is a `text` I-beam cursor for selecting the
+output number. You can trace this using `x11trace galculator`. At least on Manjaro
+Linux, you need to install the `xtrace` package to get the `x11trace` command.
+Confusingly, you might already have a `xtrace` command but that's not the same thing.
+And if you run `galculator` in Xephyr (`DISPLAY=:99 galculator`), your cursor is
+invisible (can only see the button hover highlights) until you move it over the area
+where the `text` I-beam cursor displays and move it out where it finally falls back to
+the default "x" cursor everywhere.
+
+I have no idea how cursor themes work or how various applications make cursors
+consistent across your system. I'm guessing there is some freedesktop.org standard for
+this but I haven't looked into it yet.
