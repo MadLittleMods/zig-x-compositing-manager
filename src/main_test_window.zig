@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const render = @import("test_window/render.zig");
@@ -50,6 +51,7 @@ pub fn main() !void {
         conn.setup.fixed().resource_id_base,
     );
     std.log.debug("ids: {any}", .{ids});
+    std.log.info("ids.window {0} 0x{0x}", .{ids.window});
 
     const depth = 32;
 
@@ -80,6 +82,41 @@ pub fn main() !void {
         depth,
         &state,
     );
+
+    // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
+    {
+        const wm_pid_atom = try common.intern_atom(
+            conn.sock,
+            &buffer,
+            comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
+        );
+
+        const pid: u32 = switch (builtin.os.tag) {
+            .linux => blk: {
+                const pid = std.os.linux.getpid();
+                if (pid < 0) {
+                    std.log.err("Process ID (PID) unexpectedly negative (expected it to be positive) -> {d}", .{pid});
+                    return error.ProcessIdUnexpectedlyNegative;
+                }
+
+                break :blk @intCast(pid);
+            },
+            .windows => std.os.windows.kernel32.GetCurrentProcessId(),
+            else => 0,
+        };
+
+        const pid_array = [_]u32{pid};
+        const change_property = x.change_property.withFormat(u32);
+        var message_buffer: [change_property.getLen(pid_array.len)]u8 = undefined;
+        change_property.serialize(&message_buffer, .{
+            .mode = .replace,
+            .window_id = ids.window,
+            .property = wm_pid_atom,
+            .type = x.Atom.CARDINAL,
+            .values = x.Slice(u16, [*]const u32){ .ptr = &pid_array, .len = pid_array.len },
+        });
+        try conn.send(message_buffer[0..]);
+    }
 
     // Get some font information
     //

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assertions = @import("utils/assertions.zig");
 const assert = assertions.assert;
 const x = @import("x");
@@ -314,6 +315,41 @@ pub fn main() !void {
         depth,
         &state,
     );
+
+    // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
+    {
+        const wm_pid_atom = try common.intern_atom(
+            x_request_connection.socket,
+            x_request_connection.buffer,
+            comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
+        );
+
+        const pid: u32 = switch (builtin.os.tag) {
+            .linux => blk: {
+                const pid = std.os.linux.getpid();
+                if (pid < 0) {
+                    std.log.err("Process ID (PID) unexpectedly negative (expected it to be positive) -> {d}", .{pid});
+                    return error.ProcessIdUnexpectedlyNegative;
+                }
+
+                break :blk @intCast(pid);
+            },
+            .windows => std.os.windows.kernel32.GetCurrentProcessId(),
+            else => 0,
+        };
+
+        const pid_array = [_]u32{pid};
+        const change_property = x.change_property.withFormat(u32);
+        var message_buffer: [change_property.getLen(pid_array.len)]u8 = undefined;
+        change_property.serialize(&message_buffer, .{
+            .mode = .replace,
+            .window_id = ids.window,
+            .property = wm_pid_atom,
+            .type = x.Atom.CARDINAL,
+            .values = x.Slice(u16, [*]const u32){ .ptr = &pid_array, .len = pid_array.len },
+        });
+        try x_request_connection.send(&message_buffer);
+    }
 
     // Make the overlay window click-through-able. If you're familiar with CSS, we use
     // this to apply `pointer-events: none;`.
@@ -686,6 +722,8 @@ test {
 // This test is meant to run on a 300x300 display. Create a virtual display (via Xvfb
 // or Xephyr) and point the tests to that display by setting the `DISPLAY` environment
 // variable (`DISPLAY=:99 zig build test`).
+//
+// Example: `Xephyr :99 -screen 1920x1080x24 -retro` (`-retro` to always show cursor)
 //
 // FIXME: Ideally, this test should be able to be run standalone without any extra setup
 // outside to create right size display. By default, it should just run in a headless
