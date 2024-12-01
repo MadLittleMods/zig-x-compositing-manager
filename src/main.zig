@@ -752,7 +752,7 @@ test "end-to-end" {
     }
 
     const test_window_process1 = blk: {
-        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "50", "0", "0xaaff0000" };
+        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "50", "0", "0x88ff0000" };
         var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
         // Prevent writing to `stdout` so the test runner doesn't hang,
         // see https://github.com/ziglang/zig/issues/15091
@@ -767,7 +767,7 @@ test "end-to-end" {
     };
 
     const test_window_process2 = blk: {
-        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0xaa00ff00" };
+        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0x8800ff00" };
         var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
         // Prevent writing to `stdout` so the test runner doesn't hang,
         // see https://github.com/ziglang/zig/issues/15091
@@ -782,7 +782,7 @@ test "end-to-end" {
     };
 
     const test_window_process3 = blk: {
-        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "100", "100", "0xaa0000ff" };
+        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "100", "100", "0x880000ff" };
         var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
         // Prevent writing to `stdout` so the test runner doesn't hang,
         // see https://github.com/ziglang/zig/issues/15091
