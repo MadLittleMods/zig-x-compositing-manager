@@ -350,6 +350,29 @@ pub fn main() !void {
         });
         try x_request_connection.send(&message_buffer);
     }
+    // "If _NET_WM_PID is set, the ICCCM-specified property WM_CLIENT_MACHINE MUST also be set."
+    // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
+    {
+        var host_name_buffer: [std.os.HOST_NAME_MAX]u8 = undefined;
+        // "While the ICCCM only requests that WM_CLIENT_MACHINE is set “ to a string
+        // that forms the name of the machine running the client as seen from the
+        // machine running the server” conformance to this specification requires that
+        // WM_CLIENT_MACHINE be set to the fully-qualified domain name of the client's
+        // host."
+        // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
+        const machine_name = try std.os.gethostname(&host_name_buffer);
+        const change_property = x.change_property.withFormat(u8);
+        var message_buffer = try allocator.alloc(u8, change_property.getLen(@intCast(machine_name.len)));
+        defer allocator.free(message_buffer);
+        change_property.serialize(message_buffer.ptr, .{
+            .mode = .replace,
+            .window_id = ids.window,
+            .property = x.Atom.WM_CLIENT_MACHINE,
+            .type = x.Atom.STRING,
+            .values = x.Slice(u16, [*]const u8){ .ptr = machine_name.ptr, .len = @intCast(machine_name.len) },
+        });
+        try x_request_connection.send(message_buffer);
+    }
 
     // Make the overlay window click-through-able. If you're familiar with CSS, we use
     // this to apply `pointer-events: none;`.
