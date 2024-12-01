@@ -157,7 +157,7 @@ pub fn createResources(
             // Whether this window overrides structure control facilities. Basically, a
             // suggestion whether the window manager to decorate this window (false) or
             // we want to override the behavior.
-            .override_redirect = false,
+            .override_redirect = true,
             // .save_under = true,
 
             // We don't need to know about any events for this window as everything is
