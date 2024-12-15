@@ -756,6 +756,12 @@ test {
 test "end-to-end" {
     const allocator = std.testing.allocator;
 
+    // Start listening for events before we start the process so we don't miss
+    // anything.
+    const x_event_listener = XEventListener.init(allocator);
+    defer x_event_listener.deinit();
+    const listener = x_event_listener.listenForEvents(.map_notify);
+
     {
         // Ideally, we'd be able to build and run in the same command like `zig build
         // run-test_window` but https://github.com/ziglang/zig/issues/20853 prevents us from being
@@ -788,6 +794,13 @@ test "end-to-end" {
 
         // Start the compositing manager process.
         try main_process.spawn();
+
+        // Wait for compositing manager process to be ready. We are looking for the
+        // `map_notify` event as it's a good indicator that we're ready to composite
+        // things now.
+        waitForWindowMapNotifyEventForProcessId(main_process.id);
+
+        try listener.waitForEventForProcessId(main_process.id);
 
         break :blk &main_process;
     };
