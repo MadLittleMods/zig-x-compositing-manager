@@ -6,6 +6,7 @@ const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const render = @import("compositing_manager/render.zig");
 const app_state = @import("compositing_manager/app_state.zig");
+const XEventListener = @import("x11/x_event_listener.zig").XEventListener;
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_composite_extension = @import("x11/x_composite_extension.zig");
 const x_shape_extension = @import("x11/x_shape_extension.zig");
@@ -758,9 +759,8 @@ test "end-to-end" {
 
     // Start listening for events before we start the process so we don't miss
     // anything.
-    const x_event_listener = XEventListener.init(allocator);
+    const x_event_listener = try XEventListener.init(allocator);
     defer x_event_listener.deinit();
-    const listener = x_event_listener.listenForEvents(.map_notify);
 
     {
         // Ideally, we'd be able to build and run in the same command like `zig build
@@ -798,9 +798,7 @@ test "end-to-end" {
         // Wait for compositing manager process to be ready. We are looking for the
         // `map_notify` event as it's a good indicator that we're ready to composite
         // things now.
-        waitForWindowMapNotifyEventForProcessId(main_process.id);
-
-        try listener.waitForEventForProcessId(main_process.id);
+        try x_event_listener.waitForEventFromProcess(main_process.id, .map_notify, 5000);
 
         break :blk &main_process;
     };
