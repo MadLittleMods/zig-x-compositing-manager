@@ -325,6 +325,10 @@ pub fn main() !void {
         depth,
         &state,
     );
+    // Clean-up and free resources
+    defer render.cleanupResources(x_request_connection, &ids) catch |err| {
+        std.log.err("Failed to cleanup resoures: {}", .{err});
+    };
 
     // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
     for ([_]u32{ ids.window, ids.overlay_window_id }) |window_id| {
@@ -750,36 +754,68 @@ pub fn main() !void {
 }
 
 const ChildOutput = struct {
+    child_process: *const std.ChildProcess,
     stdout: std.ArrayList(u8),
     stderr: std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+
+    /// The process must be started with `stdout_behavior` and `stderr_behavior` set to `.Pipe`
+    /// ```
+    /// child_process.stdout_behavior = .Pipe;
+    /// child_process.stderr_behavior = .Pipe;
+    fn init(child_process: *const std.ChildProcess, allocator: std.mem.Allocator) ChildOutput {
+        assert(
+            child_process.stdout_behavior == .Pipe,
+            "child_process.stdout_behavior must be set to .Pipe but saw {}",
+            .{child_process.stdout_behavior},
+        );
+        assert(
+            child_process.stderr_behavior == .Pipe,
+            "child_process.stderr_behavior must be set to .Pipe {}",
+            .{child_process.stderr_behavior},
+        );
+
+        return .{
+            .child_process = child_process,
+            .stdout = std.ArrayList(u8).init(allocator),
+            .stderr = std.ArrayList(u8).init(allocator),
+            .allocator = allocator,
+        };
+    }
 
     fn deinit(self: @This()) void {
         self.stdout.deinit();
         self.stderr.deinit();
     }
+
+    /// Collect the output text from a child process (stdout and stderr).
+    fn collectOutputFromChildProcess(self: *@This()) void {
+        self.child_process.collectOutput(
+            &self.stdout,
+            &self.stderr,
+            std.math.maxInt(usize),
+        ) catch |err| {
+            // Add a placeholder in `stderr` that we failed to collect the logs. This is
+            // the most obvious way I can think to communicate this to the user but
+            // feels a bit indirect.
+            const error_message = std.fmt.allocPrint(
+                self.allocator,
+                "<Failed to collect output from child process: {}>\n",
+                .{err},
+            ) catch |allocation_err| {
+                // We will give up and just log if we're down to allocation errors
+                std.log.err("ChildOutput: Failed to format error message: {} after encountering {}\n", .{ allocation_err, err });
+                return;
+            };
+            defer self.allocator.free(error_message);
+
+            self.stderr.appendSlice(error_message) catch |allocation_err| {
+                // We will give up and just log if we're down to allocation errors
+                std.log.err("ChildOutput: Failed to append to stderr: {} after encountering {}\n", .{ allocation_err, err });
+            };
+        };
+    }
 };
-
-/// Collect the output text from a child process (stdout and stderr).
-///
-/// Make sure your child_process has `stdout_behavior` and `stderr_behavior` set to `.Pipe`:
-/// ```
-/// child_process.stdout_behavior = .Pipe;
-/// child_process.stderr_behavior = .Pipe;
-/// ```
-fn collectOutputFromChildProcess(child_process: *const std.ChildProcess, allocator: std.mem.Allocator) !ChildOutput {
-    var child_stdout = std.ArrayList(u8).init(allocator);
-    var child_stderr = std.ArrayList(u8).init(allocator);
-    try child_process.collectOutput(
-        &child_stdout,
-        &child_stderr,
-        std.math.maxInt(usize),
-    );
-
-    return .{
-        .stdout = child_stdout,
-        .stderr = child_stderr,
-    };
-}
 
 /// Print some debug logs of what the child process printed out (stdout and stderr).
 fn printChildOutput(child_output: ChildOutput, allocator: std.mem.Allocator) !void {
@@ -859,9 +895,13 @@ test "end-to-end" {
         build_process.stderr_behavior = .Pipe;
 
         try build_process.spawn();
-        const child_output = try collectOutputFromChildProcess(&build_process, allocator);
-        defer child_output.deinit();
 
+        // Start collecting logs
+        var child_output = ChildOutput.init(&build_process, allocator);
+        defer child_output.deinit();
+        _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&child_output});
+
+        // Wait for the build to finish successfully
         const build_term = try build_process.wait();
         std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term) catch |err| {
             // Give some more context on why the build failed
@@ -882,24 +922,34 @@ test "end-to-end" {
         //
         // We set this to `.Pipe` so we can see the output if the build fails.
         main_process.stdin_behavior = .Ignore;
-        main_process.stdout_behavior = .Ignore; //.Pipe;
-        main_process.stderr_behavior = .Ignore; //.Pipe;
+        main_process.stdout_behavior = .Pipe;
+        main_process.stderr_behavior = .Pipe;
 
         // Start the compositing manager process.
         try main_process.spawn();
 
         break :blk &main_process;
     };
+    // Start collecting logs
+    var main_process_child_output = ChildOutput.init(main_process, allocator);
+    defer main_process_child_output.deinit();
+    _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&main_process_child_output});
+    // Kill the process when we're done
     defer _ = main_process.kill() catch |err| {
         std.debug.print("Failed to kill main process: {}\n", .{err});
     };
-    // const main_process_child_output = try collectOutputFromChildProcess(main_process, allocator);
-    // defer main_process_child_output.deinit();
     // Wait for compositing manager process to be ready. We are looking for the window
     // to exist as it's a good indicator that we're ready to composite things now. This
     // isn't a perfect solution but it should be good enough and empirically things work
     // even if we don't wait at all.
-    try x_window_finder.waitForProcessWindowToBeReady(main_process.id, 1000);
+    x_window_finder.waitForProcessWindowToBeReady(main_process.id, 1000) catch |err| {
+        // Give some more context what happened
+        std.debug.print("Failed to find main process window\n", .{});
+        try printChildOutput(main_process_child_output, allocator);
+
+        // Return the original assertion error
+        return err;
+    };
 
     // Build and create three overlapping test windows
     //
@@ -919,9 +969,13 @@ test "end-to-end" {
         build_process.stderr_behavior = .Pipe;
 
         try build_process.spawn();
-        const child_output = try collectOutputFromChildProcess(&build_process, allocator);
-        defer child_output.deinit();
 
+        // Start collecting logs
+        var child_output = ChildOutput.init(&build_process, allocator);
+        defer child_output.deinit();
+        _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&child_output});
+
+        // Wait for the build to finish successfully
         const build_term = try build_process.wait();
         std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term) catch |err| {
             // Give some more context on why the build failed
@@ -941,24 +995,34 @@ test "end-to-end" {
         //
         // We set this to `.Pipe` so we can see the output if the build fails.
         test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Ignore; //.Pipe;
-        test_window_process.stderr_behavior = .Ignore; //.Pipe;
+        test_window_process.stdout_behavior = .Pipe;
+        test_window_process.stderr_behavior = .Pipe;
 
         // Start the test_window process.
         try test_window_process.spawn();
 
         break :blk &test_window_process;
     };
+    // Start collecting logs
+    var test_window_process1_child_output = ChildOutput.init(test_window_process1, allocator);
+    defer test_window_process1_child_output.deinit();
+    _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&test_window_process1_child_output});
+    // Kill the process when we're done
     defer _ = test_window_process1.kill() catch |err| {
         std.debug.print("Failed to kill test window process1: {}\n", .{err});
     };
-    // const test_window_process1_child_output = try collectOutputFromChildProcess(test_window_process1, allocator);
-    // defer test_window_process1_child_output.deinit();
     // Wait for test window to be ready. We are looking for the window
     // to exist as it's a good indicator that we're ready to composite things now. This
     // isn't a perfect solution but it should be good enough and empirically things work
     // even if we don't wait at all.
-    try x_window_finder.waitForProcessWindowToBeReady(test_window_process1.id, 1000);
+    x_window_finder.waitForProcessWindowToBeReady(test_window_process1.id, 1000) catch |err| {
+        // Give some more context what happened
+        std.debug.print("Failed to find the window for test process1\n", .{});
+        try printChildOutput(main_process_child_output, allocator);
+
+        // Return the original assertion error
+        return err;
+    };
 
     const test_window_process2 = blk: {
         const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0x8800ff00" };
@@ -968,24 +1032,34 @@ test "end-to-end" {
         //
         // We set this to `.Pipe` so we can see the output if the build fails.
         test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Ignore; //.Pipe;
-        test_window_process.stderr_behavior = .Ignore; //.Pipe;
+        test_window_process.stdout_behavior = .Pipe;
+        test_window_process.stderr_behavior = .Pipe;
 
         // Start the test_window process.
         try test_window_process.spawn();
 
         break :blk &test_window_process;
     };
+    // Start collecting logs
+    var test_window_process2_child_output = ChildOutput.init(test_window_process2, allocator);
+    defer test_window_process2_child_output.deinit();
+    _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&test_window_process2_child_output});
+    // Kill the process when we're done
     defer _ = test_window_process2.kill() catch |err| {
         std.debug.print("Failed to kill test window process2: {}\n", .{err});
     };
-    // const test_window_process2_child_output = try collectOutputFromChildProcess(test_window_process2, allocator);
-    // defer test_window_process2_child_output.deinit();
     // Wait for test window to be ready. We are looking for the window
     // to exist as it's a good indicator that we're ready to composite things now. This
     // isn't a perfect solution but it should be good enough and empirically things work
     // even if we don't wait at all.
-    try x_window_finder.waitForProcessWindowToBeReady(test_window_process2.id, 1000);
+    x_window_finder.waitForProcessWindowToBeReady(test_window_process2.id, 1000) catch |err| {
+        // Give some more context what happened
+        std.debug.print("Failed to find the window for test process2\n", .{});
+        try printChildOutput(main_process_child_output, allocator);
+
+        // Return the original assertion error
+        return err;
+    };
 
     const test_window_process3 = blk: {
         const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "100", "100", "0x880000ff" };
@@ -995,24 +1069,34 @@ test "end-to-end" {
         //
         // We set this to `.Pipe` so we can see the output if the build fails.
         test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Ignore; //.Pipe;
-        test_window_process.stderr_behavior = .Ignore; //.Pipe;
+        test_window_process.stdout_behavior = .Pipe;
+        test_window_process.stderr_behavior = .Pipe;
 
         // Start the test_window process.
         try test_window_process.spawn();
 
         break :blk &test_window_process;
     };
+    // Start collecting logs
+    var test_window_process3_child_output = ChildOutput.init(test_window_process3, allocator);
+    defer test_window_process3_child_output.deinit();
+    _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&test_window_process3_child_output});
+    // Kill the process when we're done
     defer _ = test_window_process3.kill() catch |err| {
         std.debug.print("Failed to kill test window process3: {}\n", .{err});
     };
-    // const test_window_process3_child_output = try collectOutputFromChildProcess(test_window_process3, allocator);
-    // defer test_window_process3_child_output.deinit();
     // Wait for test window to be ready. We are looking for the window
     // to exist as it's a good indicator that we're ready to composite things now. This
     // isn't a perfect solution but it should be good enough and empirically things work
     // even if we don't wait at all.
-    try x_window_finder.waitForProcessWindowToBeReady(test_window_process3.id, 1000);
+    x_window_finder.waitForProcessWindowToBeReady(test_window_process3.id, 1000) catch |err| {
+        // Give some more context what happened
+        std.debug.print("Failed to find the window for test process3\n", .{});
+        try printChildOutput(main_process_child_output, allocator);
+
+        // Return the original assertion error
+        return err;
+    };
 
     // Just wait some time so we can see that the windows are overlapping and we can see
     // them updating.
@@ -1020,46 +1104,51 @@ test "end-to-end" {
 
     // Assert that the processes are still running succesfully (see
     // https://ziggit.dev/t/any-easy-way-to-check-if-the-childprocess-has-exited/3270)
-    // const running_test_processes = [_]struct {
-    //     process_description: []const u8,
-    //     child_process: *const std.ChildProcess,
-    //     child_output: ChildOutput,
-    // }{ .{
-    //     .process_description = "main compositing manager",
-    //     .child_process = main_process,
-    //     .child_output = main_process_child_output,
-    // }, .{
-    //     .process_description = "test window1",
-    //     .child_process = test_window_process1,
-    //     .child_output = test_window_process1_child_output,
-    // }, .{
-    //     .process_description = "test window2",
-    //     .child_process = test_window_process2,
-    //     .child_output = test_window_process2_child_output,
-    // }, .{
-    //     .process_description = "test window3",
-    //     .child_process = test_window_process3,
-    //     .child_output = test_window_process3_child_output,
-    // } };
-    // for (running_test_processes) |running_test_process| {
-    //     const wait_result = std.os.waitpid(
-    //         running_test_process.child_process.id,
-    //         // Make `waitpid` run non-blocking
-    //         std.os.W.NOHANG,
-    //     );
-    //     // If `pid` is 0, the process is still running (no state change yet)
-    //     if (wait_result.pid != 0) {
-    //         const term = statusToTerm(wait_result.status);
-    //         std.debug.print(
-    //             "Expected the {s} process to be still be successfully running " ++
-    //                 "at the end of the test but saw {any}\n",
-    //             .{ running_test_process.process_description, term },
-    //         );
+    const running_test_processes = [_]struct {
+        process_description: []const u8,
+        child_process: *const std.ChildProcess,
+        child_output: ChildOutput,
+    }{
+        .{
+            .process_description = "main compositing manager",
+            .child_process = main_process,
+            .child_output = main_process_child_output,
+        },
+        .{
+            .process_description = "test window1",
+            .child_process = test_window_process1,
+            .child_output = test_window_process1_child_output,
+        },
+        .{
+            .process_description = "test window2",
+            .child_process = test_window_process2,
+            .child_output = test_window_process2_child_output,
+        },
+        .{
+            .process_description = "test window3",
+            .child_process = test_window_process3,
+            .child_output = test_window_process3_child_output,
+        },
+    };
+    for (running_test_processes) |running_test_process| {
+        const wait_result = std.os.waitpid(
+            running_test_process.child_process.id,
+            // Make `waitpid` run non-blocking
+            std.os.W.NOHANG,
+        );
+        // If `pid` is 0, the process is still running (no state change yet)
+        if (wait_result.pid != 0) {
+            const term = statusToTerm(wait_result.status);
+            std.debug.print(
+                "Expected the {s} process to be still be successfully running " ++
+                    "at the end of the test but saw {any}\n",
+                .{ running_test_process.process_description, term },
+            );
 
-    //         // Give some more context on process might have exited
-    //         try printChildOutput(running_test_process.child_output, allocator);
+            // Give some more context on process might have exited
+            try printChildOutput(running_test_process.child_output, allocator);
 
-    //         return error.ProcessUnexpectedlyNoLongerRunning;
-    //     }
-    // }
+            return error.ProcessUnexpectedlyNoLongerRunning;
+        }
+    }
 }

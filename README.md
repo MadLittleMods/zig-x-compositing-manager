@@ -87,3 +87,8 @@ Run the tests:
 ```sh
 DISPLAY=:99 zig build test --summary all -Dtest-filter="end-to-end"
 ```
+
+If you're running into timeout errors and the Xehpyr screen is black instead of the
+retro checkerboard, it probably means our composite manager process was accidentally
+left running after the test ended and you just need to restart Xephyr to get a clean
+test environment again.

@@ -261,19 +261,19 @@ pub fn createResources(
 }
 
 pub fn cleanupResources(
-    sock: std.os.socket_t,
+    x_connection: common.XConnection,
     ids: *const Ids,
 ) !void {
-    {
-        var message_buffer: [x.free_pixmap.len]u8 = undefined;
-        x.free_pixmap.serialize(&message_buffer, ids.pixmap);
-        try common.send(sock, &message_buffer);
-    }
+    // {
+    //     var message_buffer: [x.free_pixmap.len]u8 = undefined;
+    //     x.free_pixmap.serialize(&message_buffer, ids.pixmap);
+    //     try common.send(x_connection.socket, &message_buffer);
+    // }
 
     {
         var message_buffer: [x.free_colormap.len]u8 = undefined;
         x.free_colormap.serialize(&message_buffer, ids.colormap);
-        try common.send(sock, &message_buffer);
+        try common.send(x_connection.socket, &message_buffer);
     }
 
     // TODO: free_gc
