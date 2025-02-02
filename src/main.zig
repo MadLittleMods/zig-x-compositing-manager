@@ -6,13 +6,13 @@ const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const render = @import("compositing_manager/render.zig");
 const app_state = @import("compositing_manager/app_state.zig");
-const XEventListener = @import("x11/x_event_listener.zig").XEventListener;
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_composite_extension = @import("x11/x_composite_extension.zig");
 const x_shape_extension = @import("x11/x_shape_extension.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_damage_extension = @import("x11/x_damage_extension.zig");
 const x_fixes_extension = @import("x11/x_fixes_extension.zig");
+const XWindowFinder = @import("x11/x_window_finder.zig").XWindowFinder;
 const render_utils = @import("utils/render_utils.zig");
 
 // In order to create the total screen presentation we need to create a render picture
@@ -26,7 +26,7 @@ pub const std_options = struct {
     pub const log_level = .debug;
 
     pub const log_scope_levels = &[_]std.log.ScopeLevel{
-        .{ .scope = .x_event_listener, .level = .debug },
+        .{ .scope = .x_window_finder, .level = .debug },
     };
 };
 
@@ -789,10 +789,9 @@ test {
 test "end-to-end" {
     const allocator = std.testing.allocator;
 
-    // Start listening for events before we start the process so we don't miss
-    // anything.
-    var x_event_listener = try XEventListener.init(allocator);
-    defer x_event_listener.deinit();
+    // Get ready
+    var x_window_finder = try XWindowFinder.init(allocator);
+    defer x_window_finder.deinit();
 
     {
         // Ideally, we'd be able to build and run in the same command like `zig build
@@ -832,14 +831,11 @@ test "end-to-end" {
     defer _ = main_process.kill() catch |err| {
         std.debug.print("Failed to kill main process: {}\n", .{err});
     };
-
-    // Wait for compositing manager process to be ready. We are looking for the
-    // `map_notify` event as it's a good indicator that we're ready to composite
-    // things now.
-    // TODO: Remove sleep
-    std.time.sleep(1000 * std.time.ns_per_ms);
-    var event_semaphor = try x_event_listener.waitForEventFromProcess(main_process.id, .map_notify);
-    try timedWait(&event_semaphor, 1000 * std.time.ns_per_ms);
+    // Wait for compositing manager process to be ready. We are looking for the window
+    // to exist as it's a good indicator that we're ready to composite things now. This
+    // isn't a perfect solution but it should be good enough and empirically things work
+    // even if we don't wait at all.
+    try x_window_finder.waitForProcessWindowToBeReady(main_process.id, 1000);
 
     // Build and create three overlapping test windows
     //
@@ -878,6 +874,11 @@ test "end-to-end" {
     defer _ = test_window_process1.kill() catch |err| {
         std.debug.print("Failed to kill test window process1: {}\n", .{err});
     };
+    // Wait for test window to be ready. We are looking for the window
+    // to exist as it's a good indicator that we're ready to composite things now. This
+    // isn't a perfect solution but it should be good enough and empirically things work
+    // even if we don't wait at all.
+    try x_window_finder.waitForProcessWindowToBeReady(test_window_process1.id, 1000);
 
     const test_window_process2 = blk: {
         const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0x8800ff00" };
@@ -896,6 +897,11 @@ test "end-to-end" {
     defer _ = test_window_process2.kill() catch |err| {
         std.debug.print("Failed to kill test window process2: {}\n", .{err});
     };
+    // Wait for test window to be ready. We are looking for the window
+    // to exist as it's a good indicator that we're ready to composite things now. This
+    // isn't a perfect solution but it should be good enough and empirically things work
+    // even if we don't wait at all.
+    try x_window_finder.waitForProcessWindowToBeReady(test_window_process2.id, 1000);
 
     const test_window_process3 = blk: {
         const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "100", "100", "0x880000ff" };
@@ -914,6 +920,11 @@ test "end-to-end" {
     defer _ = test_window_process3.kill() catch |err| {
         std.debug.print("Failed to kill test window process3: {}\n", .{err});
     };
+    // Wait for test window to be ready. We are looking for the window
+    // to exist as it's a good indicator that we're ready to composite things now. This
+    // isn't a perfect solution but it should be good enough and empirically things work
+    // even if we don't wait at all.
+    try x_window_finder.waitForProcessWindowToBeReady(test_window_process3.id, 1000);
 
     // Just wait some time so we can see that the windows are overlapping and we can see
     // them updating.

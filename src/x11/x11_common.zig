@@ -264,33 +264,6 @@ pub fn getFirstScreenFromConnectionSetup(conn_setup: x.ConnectSetup) *x.Screen {
     return screen_ptr;
 }
 
-pub fn getPixmapFormatsFromConnectionSetup(conn_setup: x.ConnectSetup) ![]const x.Format {
-    const fixed = conn_setup.fixed();
-
-    const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
-    const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
-    const pixmap_formats = try conn_setup.getFormatList(format_list_offset, format_list_limit);
-
-    return pixmap_formats;
-}
-
-/// Returns the number of bytes required to store the image data in a PutImage request.
-pub fn getPutImageDataLenBytes(
-    width: usize,
-    height: usize,
-    format: x.Format,
-) usize {
-    const bytes_per_pixel = format.bits_per_pixel / 8;
-    const scanline_len = std.mem.alignForward(
-        u16,
-        @as(u16, @intCast(bytes_per_pixel * width)),
-        format.scanline_pad / 8,
-    );
-    const data_len_bytes = height * scanline_len;
-
-    return data_len_bytes;
-}
-
 pub fn intern_atom(sock: std.os.socket_t, buffer: *x.ContiguousReadBuffer, comptime atom_name: x.Slice(u16, [*]const u8)) !x.Atom {
     const reader = common.SocketReader{ .context = sock };
 
