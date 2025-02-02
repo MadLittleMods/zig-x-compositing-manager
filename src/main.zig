@@ -22,6 +22,14 @@ const render_utils = @import("utils/render_utils.zig");
 // We want to use manual redirection so the window contents will be redirected to
 // offscreen storage, but not automatically updated on the screen when they're modified.
 
+pub const std_options = struct {
+    pub const log_level = .debug;
+
+    pub const log_scope_levels = &[_]std.log.ScopeLevel{
+        .{ .scope = .x_event_listener, .level = .debug },
+    };
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -318,61 +326,63 @@ pub fn main() !void {
     );
 
     // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
-    {
-        const wm_pid_atom = try common.intern_atom(
-            x_request_connection.socket,
-            x_request_connection.buffer,
-            comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
-        );
+    for ([_]u32{ ids.window, ids.overlay_window_id }) |window_id| {
+        {
+            const wm_pid_atom = try common.intern_atom(
+                x_request_connection.socket,
+                x_request_connection.buffer,
+                comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
+            );
 
-        const pid: u32 = switch (builtin.os.tag) {
-            .linux => blk: {
-                const pid = std.os.linux.getpid();
-                if (pid < 0) {
-                    std.log.err("Process ID (PID) unexpectedly negative (expected it to be positive) -> {d}", .{pid});
-                    return error.ProcessIdUnexpectedlyNegative;
-                }
+            const pid: u32 = switch (builtin.os.tag) {
+                .linux => blk: {
+                    const pid = std.os.linux.getpid();
+                    if (pid < 0) {
+                        std.log.err("Process ID (PID) unexpectedly negative (expected it to be positive) -> {d}", .{pid});
+                        return error.ProcessIdUnexpectedlyNegative;
+                    }
 
-                break :blk @intCast(pid);
-            },
-            .windows => std.os.windows.kernel32.GetCurrentProcessId(),
-            else => 0,
-        };
+                    break :blk @intCast(pid);
+                },
+                .windows => std.os.windows.kernel32.GetCurrentProcessId(),
+                else => 0,
+            };
 
-        const pid_array = [_]u32{pid};
-        const change_property = x.change_property.withFormat(u32);
-        var message_buffer: [change_property.getLen(pid_array.len)]u8 = undefined;
-        change_property.serialize(&message_buffer, .{
-            .mode = .replace,
-            .window_id = ids.window,
-            .property = wm_pid_atom,
-            .type = x.Atom.CARDINAL,
-            .values = x.Slice(u16, [*]const u32){ .ptr = &pid_array, .len = pid_array.len },
-        });
-        try x_request_connection.send(&message_buffer);
-    }
-    // "If _NET_WM_PID is set, the ICCCM-specified property WM_CLIENT_MACHINE MUST also be set."
-    // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
-    {
-        var host_name_buffer: [std.os.HOST_NAME_MAX]u8 = undefined;
-        // "While the ICCCM only requests that WM_CLIENT_MACHINE is set “ to a string
-        // that forms the name of the machine running the client as seen from the
-        // machine running the server” conformance to this specification requires that
-        // WM_CLIENT_MACHINE be set to the fully-qualified domain name of the client's
-        // host."
+            const pid_array = [_]u32{pid};
+            const change_property = x.change_property.withFormat(u32);
+            var message_buffer: [change_property.getLen(pid_array.len)]u8 = undefined;
+            change_property.serialize(&message_buffer, .{
+                .mode = .replace,
+                .window_id = window_id,
+                .property = wm_pid_atom,
+                .type = x.Atom.CARDINAL,
+                .values = x.Slice(u16, [*]const u32){ .ptr = &pid_array, .len = pid_array.len },
+            });
+            try x_request_connection.send(&message_buffer);
+        }
+        // "If _NET_WM_PID is set, the ICCCM-specified property WM_CLIENT_MACHINE MUST also be set."
         // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
-        const machine_name = try std.os.gethostname(&host_name_buffer);
-        const change_property = x.change_property.withFormat(u8);
-        var message_buffer = try allocator.alloc(u8, change_property.getLen(@intCast(machine_name.len)));
-        defer allocator.free(message_buffer);
-        change_property.serialize(message_buffer.ptr, .{
-            .mode = .replace,
-            .window_id = ids.window,
-            .property = x.Atom.WM_CLIENT_MACHINE,
-            .type = x.Atom.STRING,
-            .values = x.Slice(u16, [*]const u8){ .ptr = machine_name.ptr, .len = @intCast(machine_name.len) },
-        });
-        try x_request_connection.send(message_buffer);
+        {
+            var host_name_buffer: [std.os.HOST_NAME_MAX]u8 = undefined;
+            // "While the ICCCM only requests that WM_CLIENT_MACHINE is set “ to a string
+            // that forms the name of the machine running the client as seen from the
+            // machine running the server” conformance to this specification requires that
+            // WM_CLIENT_MACHINE be set to the fully-qualified domain name of the client's
+            // host."
+            // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
+            const machine_name = try std.os.gethostname(&host_name_buffer);
+            const change_property = x.change_property.withFormat(u8);
+            var message_buffer = try allocator.alloc(u8, change_property.getLen(@intCast(machine_name.len)));
+            defer allocator.free(message_buffer);
+            change_property.serialize(message_buffer.ptr, .{
+                .mode = .replace,
+                .window_id = window_id,
+                .property = x.Atom.WM_CLIENT_MACHINE,
+                .type = x.Atom.STRING,
+                .values = x.Slice(u16, [*]const u8){ .ptr = machine_name.ptr, .len = @intCast(machine_name.len) },
+            });
+            try x_request_connection.send(message_buffer);
+        }
     }
 
     // Make the overlay window click-through-able. If you're familiar with CSS, we use
@@ -738,6 +748,28 @@ pub fn main() !void {
     }
 }
 
+// FIXME: Remove once we are using a version of Zig that has this built-in, added
+// in https://github.com/ziglang/zig/pull/18805
+pub fn timedWait(sem: *std.Thread.Semaphore, timeout_ns: u64) error{Timeout}!void {
+    var timeout_timer = std.time.Timer.start() catch unreachable;
+
+    sem.mutex.lock();
+    defer sem.mutex.unlock();
+
+    while (sem.permits == 0) {
+        const elapsed = timeout_timer.read();
+        if (elapsed > timeout_ns)
+            return error.Timeout;
+
+        const local_timeout_ns = timeout_ns - elapsed;
+        try sem.cond.timedWait(&sem.mutex, local_timeout_ns);
+    }
+
+    sem.permits -= 1;
+    if (sem.permits > 0)
+        sem.cond.signal();
+}
+
 test {
     // https://ziglang.org/documentation/master/#Nested-Container-Tests
     @import("std").testing.refAllDecls(@This());
@@ -759,7 +791,7 @@ test "end-to-end" {
 
     // Start listening for events before we start the process so we don't miss
     // anything.
-    const x_event_listener = try XEventListener.init(allocator);
+    var x_event_listener = try XEventListener.init(allocator);
     defer x_event_listener.deinit();
 
     {
@@ -788,20 +820,26 @@ test "end-to-end" {
         // see https://github.com/ziglang/zig/issues/15091
         //
         // TODO: Uncomment and make it so we log the output if the test fails
-        // main_process.stdin_behavior = .Ignore;
-        // main_process.stdout_behavior = .Ignore;
-        // main_process.stderr_behavior = .Ignore;
+        main_process.stdin_behavior = .Ignore;
+        main_process.stdout_behavior = .Ignore;
+        main_process.stderr_behavior = .Ignore;
 
         // Start the compositing manager process.
         try main_process.spawn();
 
-        // Wait for compositing manager process to be ready. We are looking for the
-        // `map_notify` event as it's a good indicator that we're ready to composite
-        // things now.
-        try x_event_listener.waitForEventFromProcess(main_process.id, .map_notify, 5000);
-
         break :blk &main_process;
     };
+    defer _ = main_process.kill() catch |err| {
+        std.debug.print("Failed to kill main process: {}\n", .{err});
+    };
+
+    // Wait for compositing manager process to be ready. We are looking for the
+    // `map_notify` event as it's a good indicator that we're ready to composite
+    // things now.
+    // TODO: Remove sleep
+    std.time.sleep(1000 * std.time.ns_per_ms);
+    var event_semaphor = try x_event_listener.waitForEventFromProcess(main_process.id, .map_notify);
+    try timedWait(&event_semaphor, 1000 * std.time.ns_per_ms);
 
     // Build and create three overlapping test windows
     //
@@ -837,6 +875,9 @@ test "end-to-end" {
 
         break :blk &test_window_process;
     };
+    defer _ = test_window_process1.kill() catch |err| {
+        std.debug.print("Failed to kill test window process1: {}\n", .{err});
+    };
 
     const test_window_process2 = blk: {
         const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0x8800ff00" };
@@ -851,6 +892,9 @@ test "end-to-end" {
         try test_window_process.spawn();
 
         break :blk &test_window_process;
+    };
+    defer _ = test_window_process2.kill() catch |err| {
+        std.debug.print("Failed to kill test window process2: {}\n", .{err});
     };
 
     const test_window_process3 = blk: {
@@ -867,13 +911,11 @@ test "end-to-end" {
 
         break :blk &test_window_process;
     };
+    defer _ = test_window_process3.kill() catch |err| {
+        std.debug.print("Failed to kill test window process3: {}\n", .{err});
+    };
 
     // Just wait some time so we can see that the windows are overlapping and we can see
     // them updating.
     std.time.sleep(2 * std.time.ns_per_s);
-
-    _ = try test_window_process1.kill();
-    _ = try test_window_process2.kill();
-    _ = try test_window_process3.kill();
-    _ = try main_process.kill();
 }

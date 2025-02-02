@@ -64,6 +64,10 @@ pub const XConnection = struct {
     pub fn deinit(self: *const XConnection) void {
         self.double_buffer.deinit(); // not necessary but good to test
         self.allocator.destroy(self.buffer);
+        // Shutdown the socket to wake up `std.os.recv(...)` with an error unblock the
+        // thread listening for events. The thread with the `recv()` call can close the
+        // socket the normal way, like a normal error happened. (see
+        // https://stackoverflow.com/questions/3589723/can-a-socket-be-closed-from-another-thread-when-a-send-recv-on-the-same-socket/27790293#27790293)
         std.os.shutdown(self.socket, .both) catch {};
     }
 
