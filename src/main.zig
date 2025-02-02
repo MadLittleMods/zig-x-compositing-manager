@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assertions = @import("utils/assertions.zig");
 const assert = assertions.assert;
+const string_utils = @import("utils/string_utils.zig");
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const render = @import("compositing_manager/render.zig");
@@ -748,26 +749,75 @@ pub fn main() !void {
     }
 }
 
-// FIXME: Remove once we are using a version of Zig that has this built-in, added
-// in https://github.com/ziglang/zig/pull/18805
-pub fn timedWait(sem: *std.Thread.Semaphore, timeout_ns: u64) error{Timeout}!void {
-    var timeout_timer = std.time.Timer.start() catch unreachable;
+const ChildOutput = struct {
+    stdout: std.ArrayList(u8),
+    stderr: std.ArrayList(u8),
 
-    sem.mutex.lock();
-    defer sem.mutex.unlock();
-
-    while (sem.permits == 0) {
-        const elapsed = timeout_timer.read();
-        if (elapsed > timeout_ns)
-            return error.Timeout;
-
-        const local_timeout_ns = timeout_ns - elapsed;
-        try sem.cond.timedWait(&sem.mutex, local_timeout_ns);
+    fn deinit(self: @This()) void {
+        self.stdout.deinit();
+        self.stderr.deinit();
     }
+};
 
-    sem.permits -= 1;
-    if (sem.permits > 0)
-        sem.cond.signal();
+/// Collect the output text from a child process (stdout and stderr).
+///
+/// Make sure your child_process has `stdout_behavior` and `stderr_behavior` set to `.Pipe`:
+/// ```
+/// child_process.stdout_behavior = .Pipe;
+/// child_process.stderr_behavior = .Pipe;
+/// ```
+fn collectOutputFromChildProcess(child_process: *const std.ChildProcess, allocator: std.mem.Allocator) !ChildOutput {
+    var child_stdout = std.ArrayList(u8).init(allocator);
+    var child_stderr = std.ArrayList(u8).init(allocator);
+    try child_process.collectOutput(
+        &child_stdout,
+        &child_stderr,
+        std.math.maxInt(usize),
+    );
+
+    return .{
+        .stdout = child_stdout,
+        .stderr = child_stderr,
+    };
+}
+
+/// Print some debug logs of what the child process printed out (stdout and stderr).
+fn printChildOutput(child_output: ChildOutput, allocator: std.mem.Allocator) !void {
+    const stdout_separator_spacer = try string_utils.repeatString(
+        "=",
+        try string_utils.findLengthOfPrintedValue(child_output.stdout.items.len, "{d}", allocator),
+        allocator,
+    );
+    defer allocator.free(stdout_separator_spacer);
+    std.debug.print("================= stdout start ({d}) =================\n{s}\n================= stdout end {s}======================\n\n", .{
+        child_output.stdout.items.len,
+        child_output.stdout.items,
+        stdout_separator_spacer,
+    });
+
+    const stderr_separator_spacer = try string_utils.repeatString(
+        "=",
+        try string_utils.findLengthOfPrintedValue(child_output.stderr.items.len, "{d}", allocator),
+        allocator,
+    );
+    defer allocator.free(stderr_separator_spacer);
+    std.debug.print("================= stderr start ({d}) =================\n{s}\n================= stderr end {s}======================\n\n", .{
+        child_output.stderr.items.len,
+        child_output.stderr.items,
+        stderr_separator_spacer,
+    });
+}
+
+// Pulled from `std.ChildProcess.statusToTerm`
+fn statusToTerm(status: u32) std.ChildProcess.Term {
+    return if (std.os.W.IFEXITED(status))
+        .{ .Exited = std.os.W.EXITSTATUS(status) }
+    else if (std.os.W.IFSIGNALED(status))
+        .{ .Signal = std.os.W.TERMSIG(status) }
+    else if (std.os.W.IFSTOPPED(status))
+        .{ .Stopped = std.os.W.STOPSIG(status) }
+    else
+        .{ .Unknown = status };
 }
 
 test {
@@ -800,28 +850,40 @@ test "end-to-end" {
         // commands.
         const build_argv = [_][]const u8{ "zig", "build", "main" };
         var build_process = std.ChildProcess.init(&build_argv, allocator);
-        // Prevent writing to `stdout` so the test runner doesn't hang,
-        // see https://github.com/ziglang/zig/issues/15091
+        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
+        // doesn't hang, see https://github.com/ziglang/zig/issues/15091.
+        //
+        // We set this to `.Pipe` so we can see the output if the build fails.
         build_process.stdin_behavior = .Ignore;
-        build_process.stdout_behavior = .Ignore;
-        build_process.stderr_behavior = .Ignore;
+        build_process.stdout_behavior = .Pipe;
+        build_process.stderr_behavior = .Pipe;
 
         try build_process.spawn();
+        const child_output = try collectOutputFromChildProcess(&build_process, allocator);
+        defer child_output.deinit();
+
         const build_term = try build_process.wait();
-        try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term);
+        std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term) catch |err| {
+            // Give some more context on why the build failed
+            std.debug.print("Failed to build the main compositing manager\n", .{});
+            try printChildOutput(child_output, allocator);
+
+            // Return the original assertion error
+            return err;
+        };
     }
 
     // Start the compositing manager process.
     const main_process = blk: {
         const main_argv = [_][]const u8{"./zig-out/bin/main"};
         var main_process = std.ChildProcess.init(&main_argv, allocator);
-        // Prevent writing to `stdout` so the test runner doesn't hang,
-        // see https://github.com/ziglang/zig/issues/15091
+        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
+        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
         //
-        // TODO: Uncomment and make it so we log the output if the test fails
+        // We set this to `.Pipe` so we can see the output if the build fails.
         main_process.stdin_behavior = .Ignore;
-        main_process.stdout_behavior = .Ignore;
-        main_process.stderr_behavior = .Ignore;
+        main_process.stdout_behavior = .Ignore; //.Pipe;
+        main_process.stderr_behavior = .Ignore; //.Pipe;
 
         // Start the compositing manager process.
         try main_process.spawn();
@@ -831,6 +893,8 @@ test "end-to-end" {
     defer _ = main_process.kill() catch |err| {
         std.debug.print("Failed to kill main process: {}\n", .{err});
     };
+    // const main_process_child_output = try collectOutputFromChildProcess(main_process, allocator);
+    // defer main_process_child_output.deinit();
     // Wait for compositing manager process to be ready. We are looking for the window
     // to exist as it's a good indicator that we're ready to composite things now. This
     // isn't a perfect solution but it should be good enough and empirically things work
@@ -846,25 +910,39 @@ test "end-to-end" {
         // commands.
         const build_argv = [_][]const u8{ "zig", "build", "test_window" };
         var build_process = std.ChildProcess.init(&build_argv, allocator);
-        // Prevent writing to `stdout` so the test runner doesn't hang,
-        // see https://github.com/ziglang/zig/issues/15091
+        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
+        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
+        //
+        // We set this to `.Pipe` so we can see the output if the build fails.
         build_process.stdin_behavior = .Ignore;
-        build_process.stdout_behavior = .Ignore;
-        build_process.stderr_behavior = .Ignore;
+        build_process.stdout_behavior = .Pipe;
+        build_process.stderr_behavior = .Pipe;
 
         try build_process.spawn();
+        const child_output = try collectOutputFromChildProcess(&build_process, allocator);
+        defer child_output.deinit();
+
         const build_term = try build_process.wait();
-        try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term);
+        std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term) catch |err| {
+            // Give some more context on why the build failed
+            std.debug.print("Failed to build test window\n", .{});
+            try printChildOutput(child_output, allocator);
+
+            // Return the original assertion error
+            return err;
+        };
     }
 
     const test_window_process1 = blk: {
         const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "50", "0", "0x88ff0000" };
         var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
-        // Prevent writing to `stdout` so the test runner doesn't hang,
-        // see https://github.com/ziglang/zig/issues/15091
+        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
+        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
+        //
+        // We set this to `.Pipe` so we can see the output if the build fails.
         test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Ignore;
-        test_window_process.stderr_behavior = .Ignore;
+        test_window_process.stdout_behavior = .Ignore; //.Pipe;
+        test_window_process.stderr_behavior = .Ignore; //.Pipe;
 
         // Start the test_window process.
         try test_window_process.spawn();
@@ -874,6 +952,8 @@ test "end-to-end" {
     defer _ = test_window_process1.kill() catch |err| {
         std.debug.print("Failed to kill test window process1: {}\n", .{err});
     };
+    // const test_window_process1_child_output = try collectOutputFromChildProcess(test_window_process1, allocator);
+    // defer test_window_process1_child_output.deinit();
     // Wait for test window to be ready. We are looking for the window
     // to exist as it's a good indicator that we're ready to composite things now. This
     // isn't a perfect solution but it should be good enough and empirically things work
@@ -883,11 +963,13 @@ test "end-to-end" {
     const test_window_process2 = blk: {
         const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0x8800ff00" };
         var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
-        // Prevent writing to `stdout` so the test runner doesn't hang,
-        // see https://github.com/ziglang/zig/issues/15091
+        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
+        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
+        //
+        // We set this to `.Pipe` so we can see the output if the build fails.
         test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Ignore;
-        test_window_process.stderr_behavior = .Ignore;
+        test_window_process.stdout_behavior = .Ignore; //.Pipe;
+        test_window_process.stderr_behavior = .Ignore; //.Pipe;
 
         // Start the test_window process.
         try test_window_process.spawn();
@@ -897,6 +979,8 @@ test "end-to-end" {
     defer _ = test_window_process2.kill() catch |err| {
         std.debug.print("Failed to kill test window process2: {}\n", .{err});
     };
+    // const test_window_process2_child_output = try collectOutputFromChildProcess(test_window_process2, allocator);
+    // defer test_window_process2_child_output.deinit();
     // Wait for test window to be ready. We are looking for the window
     // to exist as it's a good indicator that we're ready to composite things now. This
     // isn't a perfect solution but it should be good enough and empirically things work
@@ -906,11 +990,13 @@ test "end-to-end" {
     const test_window_process3 = blk: {
         const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "100", "100", "0x880000ff" };
         var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
-        // Prevent writing to `stdout` so the test runner doesn't hang,
-        // see https://github.com/ziglang/zig/issues/15091
+        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
+        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
+        //
+        // We set this to `.Pipe` so we can see the output if the build fails.
         test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Ignore;
-        test_window_process.stderr_behavior = .Ignore;
+        test_window_process.stdout_behavior = .Ignore; //.Pipe;
+        test_window_process.stderr_behavior = .Ignore; //.Pipe;
 
         // Start the test_window process.
         try test_window_process.spawn();
@@ -920,6 +1006,8 @@ test "end-to-end" {
     defer _ = test_window_process3.kill() catch |err| {
         std.debug.print("Failed to kill test window process3: {}\n", .{err});
     };
+    // const test_window_process3_child_output = try collectOutputFromChildProcess(test_window_process3, allocator);
+    // defer test_window_process3_child_output.deinit();
     // Wait for test window to be ready. We are looking for the window
     // to exist as it's a good indicator that we're ready to composite things now. This
     // isn't a perfect solution but it should be good enough and empirically things work
@@ -929,4 +1017,49 @@ test "end-to-end" {
     // Just wait some time so we can see that the windows are overlapping and we can see
     // them updating.
     std.time.sleep(2 * std.time.ns_per_s);
+
+    // Assert that the processes are still running succesfully (see
+    // https://ziggit.dev/t/any-easy-way-to-check-if-the-childprocess-has-exited/3270)
+    // const running_test_processes = [_]struct {
+    //     process_description: []const u8,
+    //     child_process: *const std.ChildProcess,
+    //     child_output: ChildOutput,
+    // }{ .{
+    //     .process_description = "main compositing manager",
+    //     .child_process = main_process,
+    //     .child_output = main_process_child_output,
+    // }, .{
+    //     .process_description = "test window1",
+    //     .child_process = test_window_process1,
+    //     .child_output = test_window_process1_child_output,
+    // }, .{
+    //     .process_description = "test window2",
+    //     .child_process = test_window_process2,
+    //     .child_output = test_window_process2_child_output,
+    // }, .{
+    //     .process_description = "test window3",
+    //     .child_process = test_window_process3,
+    //     .child_output = test_window_process3_child_output,
+    // } };
+    // for (running_test_processes) |running_test_process| {
+    //     const wait_result = std.os.waitpid(
+    //         running_test_process.child_process.id,
+    //         // Make `waitpid` run non-blocking
+    //         std.os.W.NOHANG,
+    //     );
+    //     // If `pid` is 0, the process is still running (no state change yet)
+    //     if (wait_result.pid != 0) {
+    //         const term = statusToTerm(wait_result.status);
+    //         std.debug.print(
+    //             "Expected the {s} process to be still be successfully running " ++
+    //                 "at the end of the test but saw {any}\n",
+    //             .{ running_test_process.process_description, term },
+    //         );
+
+    //         // Give some more context on process might have exited
+    //         try printChildOutput(running_test_process.child_output, allocator);
+
+    //         return error.ProcessUnexpectedlyNoLongerRunning;
+    //     }
+    // }
 }

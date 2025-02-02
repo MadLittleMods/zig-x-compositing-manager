@@ -6,12 +6,15 @@ const render = @import("test_window/render.zig");
 const AppState = @import("test_window/app_state.zig").AppState;
 const render_utils = @import("utils/render_utils.zig");
 
-// Example:
-// DISPLAY=:99 zig build run-test_window -- 0 0 0xaaff6622
-//
-// Arg 0: X position
-// Arg 1: Y position
-// Arg 2: Window background color
+/// Renders a 200x200 colored square at the specified coordinates, with text in
+/// the center that shows the application's runtime duration since launch
+///
+/// Example:
+/// DISPLAY=:99 zig build run-test_window -- 0 0 0xaaff6622
+///
+/// Arg 0: X position
+/// Arg 1: Y position
+/// Arg 2: Window background color
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -82,6 +85,10 @@ pub fn main() !void {
         depth,
         &state,
     );
+    // Clean-up and free resources
+    defer render.cleanupResources(conn.sock, &ids) catch |err| {
+        std.log.err("Failed to cleanup resoures: {}", .{err});
+    };
 
     // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
     {
@@ -283,7 +290,4 @@ pub fn main() !void {
     //         }
     //     }
     // }
-
-    // Clean-up
-    try render.cleanupResources(ids);
 }
