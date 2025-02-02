@@ -938,10 +938,10 @@ test "end-to-end" {
     defer _ = main_process.kill() catch |err| {
         std.debug.print("Failed to kill main process: {}\n", .{err});
     };
-    // Wait for compositing manager process to be ready. We are looking for the window
-    // to exist as it's a good indicator that we're ready to composite things now. This
-    // isn't a perfect solution but it should be good enough and empirically things work
-    // even if we don't wait at all.
+    // Wait for compositing manager process to be ready. This isn't a perfect solution
+    // as we should ideally wait for the window to be mapped and listening for events
+    // but it should be good enough and emperically, things seem to work even without
+    // waiting here.
     x_window_finder.waitForProcessWindowToBeReady(main_process.id, 1000) catch |err| {
         // Give some more context what happened
         std.debug.print("Failed to find main process window\n", .{});
@@ -1011,10 +1011,9 @@ test "end-to-end" {
     defer _ = test_window_process1.kill() catch |err| {
         std.debug.print("Failed to kill test window process1: {}\n", .{err});
     };
-    // Wait for test window to be ready. We are looking for the window
-    // to exist as it's a good indicator that we're ready to composite things now. This
-    // isn't a perfect solution but it should be good enough and empirically things work
-    // even if we don't wait at all.
+    // Wait for test window to be ready so we get a consistent stacking order of the test
+    // windows. This isn't a perfect solution as we should ideally wait for the window to
+    // be mapped but it should be good enough.
     x_window_finder.waitForProcessWindowToBeReady(test_window_process1.id, 1000) catch |err| {
         // Give some more context what happened
         std.debug.print("Failed to find the window for test process1\n", .{});
@@ -1048,10 +1047,9 @@ test "end-to-end" {
     defer _ = test_window_process2.kill() catch |err| {
         std.debug.print("Failed to kill test window process2: {}\n", .{err});
     };
-    // Wait for test window to be ready. We are looking for the window
-    // to exist as it's a good indicator that we're ready to composite things now. This
-    // isn't a perfect solution but it should be good enough and empirically things work
-    // even if we don't wait at all.
+    // Wait for test window to be ready so we get a consistent stacking order of the test
+    // windows. This isn't a perfect solution as should ideally wait for the window to
+    // be mapped but it should be good enough.
     x_window_finder.waitForProcessWindowToBeReady(test_window_process2.id, 1000) catch |err| {
         // Give some more context what happened
         std.debug.print("Failed to find the window for test process2\n", .{});
@@ -1085,10 +1083,9 @@ test "end-to-end" {
     defer _ = test_window_process3.kill() catch |err| {
         std.debug.print("Failed to kill test window process3: {}\n", .{err});
     };
-    // Wait for test window to be ready. We are looking for the window
-    // to exist as it's a good indicator that we're ready to composite things now. This
-    // isn't a perfect solution but it should be good enough and empirically things work
-    // even if we don't wait at all.
+    // Wait for test window to be ready so we get a consistent stacking order of the test
+    // windows. This isn't a perfect solution as should ideally wait for the window to
+    // be mapped but it should be good enough.
     x_window_finder.waitForProcessWindowToBeReady(test_window_process3.id, 1000) catch |err| {
         // Give some more context what happened
         std.debug.print("Failed to find the window for test process3\n", .{});
@@ -1152,3 +1149,5 @@ test "end-to-end" {
         }
     }
 }
+
+// TODO: Test for moving windows around, resizing, stacking order, etc.
