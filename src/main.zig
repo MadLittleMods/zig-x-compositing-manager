@@ -1017,7 +1017,7 @@ test "end-to-end" {
     x_window_finder.waitForProcessWindowToBeReady(test_window_process1.id, 1000) catch |err| {
         // Give some more context what happened
         std.debug.print("Failed to find the window for test process1\n", .{});
-        try printChildOutput(main_process_child_output, allocator);
+        try printChildOutput(test_window_process1_child_output, allocator);
 
         // Return the original assertion error
         return err;
@@ -1053,7 +1053,7 @@ test "end-to-end" {
     x_window_finder.waitForProcessWindowToBeReady(test_window_process2.id, 1000) catch |err| {
         // Give some more context what happened
         std.debug.print("Failed to find the window for test process2\n", .{});
-        try printChildOutput(main_process_child_output, allocator);
+        try printChildOutput(test_window_process2_child_output, allocator);
 
         // Return the original assertion error
         return err;
@@ -1089,7 +1089,7 @@ test "end-to-end" {
     x_window_finder.waitForProcessWindowToBeReady(test_window_process3.id, 1000) catch |err| {
         // Give some more context what happened
         std.debug.print("Failed to find the window for test process3\n", .{});
-        try printChildOutput(main_process_child_output, allocator);
+        try printChildOutput(test_window_process3_child_output, allocator);
 
         // Return the original assertion error
         return err;
