@@ -1099,7 +1099,8 @@ test "end-to-end" {
     // them updating.
     std.time.sleep(2 * std.time.ns_per_s);
 
-    // Assert that the processes are still running succesfully (see
+    // Assert that the processes are still running succesfully and nothing went wrong
+    // during the tests (see
     // https://ziggit.dev/t/any-easy-way-to-check-if-the-childprocess-has-exited/3270)
     const running_test_processes = [_]struct {
         process_description: []const u8,
