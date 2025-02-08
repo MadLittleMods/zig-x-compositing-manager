@@ -871,7 +871,7 @@ test "end-to-end" {
                 .{ running_process.description, term },
             );
 
-            // Give some more context on process might have exited
+            // Give some more context on why the process might have exited
             try child_process_utils.printChildOutput(running_process.child_output, allocator);
 
             return error.ProcessUnexpectedlyNoLongerRunning;
