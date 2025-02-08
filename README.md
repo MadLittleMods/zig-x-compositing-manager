@@ -71,6 +71,15 @@ zig build run-test_window -- 50 0 0x88ff0000
 
 ### Testing
 
+> [!NOTE]
+>
+> Ideally, the tests should be self-contained and runnable without requiring additional
+> setup, such as manually creating and configuring a display of the correct size. By
+> default, it should just run in a headless environment and we'd have `Xvfb` as a
+> dependency that we'd automatically build ourselves to run the tests. I hate when
+> projects require you to install extra system dependencies to get things working. The
+> only thing you should need is the right version of Zig.
+
 Launch Xephyr (virtual X server that we can run our test in):
 
  - `:99` specifies the display number to create/use in your virtual environment (you can use

@@ -766,11 +766,12 @@ test {
 //
 // Example: `Xephyr :99 -screen 1920x1080x24 -retro` (`-retro` to always show cursor)
 //
-// FIXME: Ideally, this test should be able to be run standalone without any extra setup
-// outside to create right size display. By default, it should just run in a headless
-// environment and we'd have `Xvfb` as a dependency we build ourselves to run the tests.
-// I hate when projects require you to install extra system dependencies to get things
-// working. The only thing you should need is the right version of Zig.
+// FIXME: Ideally, the tests should be self-contained and runnable without requiring
+// additional setup, such as manually creating and configuring a display of the correct
+// size. By default, it should just run in a headless environment and we'd have `Xvfb`
+// as a dependency that we'd automatically build ourselves to run the tests. I hate when
+// projects require you to install extra system dependencies to get things working. The
+// only thing you should need is the right version of Zig.
 test "end-to-end" {
     const allocator = std.testing.allocator;
 
