@@ -763,6 +763,7 @@ const ChildOutput = struct {
     /// ```
     /// child_process.stdout_behavior = .Pipe;
     /// child_process.stderr_behavior = .Pipe;
+    /// ```
     fn init(child_process: *const std.ChildProcess, allocator: std.mem.Allocator) ChildOutput {
         assert(
             child_process.stdout_behavior == .Pipe,
@@ -844,8 +845,51 @@ fn printChildOutput(child_output: ChildOutput, allocator: std.mem.Allocator) !vo
     });
 }
 
-// Pulled from `std.ChildProcess.statusToTerm`
-fn statusToTerm(status: u32) std.ChildProcess.Term {
+pub const Term = union(enum) {
+    Running: void,
+    Exited: u8,
+    Signal: u32,
+    Stopped: u32,
+    Unknown: u32,
+    NotFound: void,
+};
+
+/// Check if a process is still running, or not.
+///
+/// Modified version of `std.os.waitpid` so we can handle "still running" and "not
+/// found" cases (more friendly to work with).
+pub fn waitpid(pid: std.os.pid_t, flags: u32) Term {
+    const Status = if (builtin.link_libc) c_int else u32;
+    var status: Status = undefined;
+    const coerced_flags = if (builtin.link_libc) @as(c_int, @intCast(flags)) else flags;
+    while (true) {
+        const rc = std.os.system.waitpid(pid, &status, coerced_flags);
+        switch (std.os.errno(rc)) {
+            // If `pid` is 0, the process is still running (no state change yet)
+            .SUCCESS => {
+                const wait_result = std.os.WaitPidResult{
+                    .pid = @as(std.os.pid_t, @intCast(rc)),
+                    .status = @as(u32, @bitCast(status)),
+                };
+
+                // If `pid` is 0, the process is still running (no state change yet)
+                if (wait_result.pid == 0) {
+                    return Term.Running;
+                } else {
+                    return statusToTerm(wait_result.status);
+                }
+            },
+            .INTR => continue,
+            // The process specified does not exist.
+            .CHILD => return Term.NotFound,
+            .INVAL => unreachable, // Invalid flags.
+            else => unreachable,
+        }
+    }
+}
+
+// via`std.ChildProcess.statusToTerm`
+fn statusToTerm(status: u32) Term {
     return if (std.os.W.IFEXITED(status))
         .{ .Exited = std.os.W.EXITSTATUS(status) }
     else if (std.os.W.IFSIGNALED(status))
@@ -855,6 +899,93 @@ fn statusToTerm(status: u32) std.ChildProcess.Term {
     else
         .{ .Unknown = status };
 }
+
+/// Wrapper around ChildProcess that can handle collecting logs and some utilities for
+/// working with X11 applications.
+const ChildProcessRunner = struct {
+    description: []const u8,
+    child_output: ChildOutput,
+    child_process: *std.ChildProcess,
+    allocator: std.mem.Allocator,
+
+    fn init(
+        description: []const u8,
+        argv: []const []const u8,
+        allocator: std.mem.Allocator,
+    ) !@This() {
+        var child_process = std.ChildProcess.init(argv, allocator);
+        // The default behavior is `.Inherit` which will muddy up test runner `stdout`
+        // and make the test runner hang, see
+        // https://github.com/ziglang/zig/issues/15091
+        //
+        // We set `stdout` and `stderr` to `.Pipe` so we can see the output if the build
+        // fails.
+        child_process.stdin_behavior = .Ignore;
+        child_process.stdout_behavior = .Pipe;
+        child_process.stderr_behavior = .Pipe;
+
+        // Start the test_window process.
+        try child_process.spawn();
+
+        // Start collecting logs
+        var child_output = ChildOutput.init(&child_process, allocator);
+        // TODO: asdf uncomment
+        // _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&child_output});
+
+        return .{
+            .description = description,
+            .child_output = child_output,
+            .child_process = &child_process,
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: @This()) void {
+        std.debug.print("asdf deinit\n", .{});
+        self.child_output.deinit();
+
+        // Kill the process when we're done
+        _ = self.child_process.kill() catch |err| {
+            std.debug.print("Failed to kill {s}: {}\n", .{ self.description, err });
+        };
+    }
+
+    fn waitForProcessToExitSuccessfully(self: *@This()) !void {
+        std.debug.print("asdf {}, {any}\n", .{ self.child_process.id, self.child_process.term });
+        const term = try self.child_process.wait();
+        std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, term) catch |err| {
+            // Give some more context on the failure
+            std.debug.print("{s} failed to exit and finish successfully\n", .{self.description});
+            try printChildOutput(self.child_output, self.allocator);
+
+            // Return the original assertion error
+            return err;
+        };
+    }
+
+    /// Wait for the X Window to be ready.
+    ///
+    /// This is useful so we get consistent stacking orders of the test windows or make
+    /// sure the compositing manager is ready to composite things before we spawn more
+    /// windows.
+    ///
+    /// This isn't a perfect solution as we should ideally wait for the window to be
+    /// mapped but it should be good enough.
+    fn waitForProcessWindowToBeReady(
+        self: @This(),
+        x_window_finder: *XWindowFinder,
+        timeout_ms: u64,
+    ) !void {
+        x_window_finder.waitForProcessWindowToBeReady(self.child_process.id, timeout_ms) catch |err| {
+            // Give some more context what happened
+            std.debug.print("Failed to find the window for {s}\n", .{self.description});
+            try printChildOutput(self.child_output, self.allocator);
+
+            // Return the original assertion error
+            return err;
+        };
+    }
+};
 
 test {
     // https://ziglang.org/documentation/master/#Nested-Container-Tests
@@ -879,272 +1010,101 @@ test "end-to-end" {
     var x_window_finder = try XWindowFinder.init(allocator);
     defer x_window_finder.deinit();
 
-    {
-        // Ideally, we'd be able to build and run in the same command like `zig build
-        // run-test_window` but https://github.com/ziglang/zig/issues/20853 prevents us from being
-        // able to kill the process cleanly. So we have to build and run in separate
-        // commands.
-        const build_argv = [_][]const u8{ "zig", "build", "main" };
-        var build_process = std.ChildProcess.init(&build_argv, allocator);
-        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
-        // doesn't hang, see https://github.com/ziglang/zig/issues/15091.
-        //
-        // We set this to `.Pipe` so we can see the output if the build fails.
-        build_process.stdin_behavior = .Ignore;
-        build_process.stdout_behavior = .Pipe;
-        build_process.stderr_behavior = .Pipe;
-
-        try build_process.spawn();
-
-        // Start collecting logs
-        var child_output = ChildOutput.init(&build_process, allocator);
-        defer child_output.deinit();
-        _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&child_output});
-
-        // Wait for the build to finish successfully
-        const build_term = try build_process.wait();
-        std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term) catch |err| {
-            // Give some more context on why the build failed
-            std.debug.print("Failed to build the main compositing manager\n", .{});
-            try printChildOutput(child_output, allocator);
-
-            // Return the original assertion error
-            return err;
-        };
-    }
+    // Ideally, we'd be able to build and run in the same command like `zig build
+    // run-test_window` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // able to kill the process cleanly. So we have to build and run in separate
+    // commands.
+    var main_build_process_runner = try ChildProcessRunner.init(
+        "main compositing manager build",
+        &[_][]const u8{ "zig", "build", "main" },
+        allocator,
+    );
+    defer main_build_process_runner.deinit();
+    try main_build_process_runner.waitForProcessToExitSuccessfully();
 
     // Start the compositing manager process.
-    const main_process = blk: {
-        const main_argv = [_][]const u8{"./zig-out/bin/main"};
-        var main_process = std.ChildProcess.init(&main_argv, allocator);
-        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
-        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
-        //
-        // We set this to `.Pipe` so we can see the output if the build fails.
-        main_process.stdin_behavior = .Ignore;
-        main_process.stdout_behavior = .Pipe;
-        main_process.stderr_behavior = .Pipe;
-
-        // Start the compositing manager process.
-        try main_process.spawn();
-
-        break :blk &main_process;
-    };
-    // Start collecting logs
-    var main_process_child_output = ChildOutput.init(main_process, allocator);
-    defer main_process_child_output.deinit();
-    _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&main_process_child_output});
-    // Kill the process when we're done
-    defer _ = main_process.kill() catch |err| {
-        std.debug.print("Failed to kill main process: {}\n", .{err});
-    };
-    // Wait for compositing manager process to be ready. This isn't a perfect solution
-    // as we should ideally wait for the window to be mapped and listening for events
-    // but it should be good enough and emperically, things seem to work even without
-    // waiting here.
-    x_window_finder.waitForProcessWindowToBeReady(main_process.id, 1000) catch |err| {
-        // Give some more context what happened
-        std.debug.print("Failed to find main process window\n", .{});
-        try printChildOutput(main_process_child_output, allocator);
-
-        // Return the original assertion error
-        return err;
-    };
+    const main_process_runner = try ChildProcessRunner.init(
+        "main compositing manager",
+        &[_][]const u8{ "zig", "build", "main" },
+        allocator,
+    );
+    defer main_process_runner.deinit();
+    // Wait for the compositing manager to be ready to handle new windows
+    try main_process_runner.waitForProcessWindowToBeReady(&x_window_finder, 1000);
 
     // Build and create three overlapping test windows
     //
-    {
-        // Ideally, we'd be able to build and run in the same command like `zig build
-        // run-test_window` but https://github.com/ziglang/zig/issues/20853 prevents us from being
-        // able to kill the process cleanly. So we have to build and run in separate
-        // commands.
-        const build_argv = [_][]const u8{ "zig", "build", "test_window" };
-        var build_process = std.ChildProcess.init(&build_argv, allocator);
-        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
-        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
-        //
-        // We set this to `.Pipe` so we can see the output if the build fails.
-        build_process.stdin_behavior = .Ignore;
-        build_process.stdout_behavior = .Pipe;
-        build_process.stderr_behavior = .Pipe;
+    // Ideally, we'd be able to build and run in the same command like `zig build
+    // run-test_window` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // able to kill the process cleanly. So we have to build and run in separate
+    // commands.
+    var test_window_build_process_runner = try ChildProcessRunner.init(
+        "test window build",
+        &[_][]const u8{ "zig", "build", "test_window" },
+        allocator,
+    );
+    defer test_window_build_process_runner.deinit();
+    try test_window_build_process_runner.waitForProcessToExitSuccessfully();
 
-        try build_process.spawn();
+    var test_window_process_runner1 = try ChildProcessRunner.init(
+        "test window1",
+        &[_][]const u8{ "./zig-out/bin/test_window", "50", "0", "0x88ff0000" },
+        allocator,
+    );
+    defer test_window_process_runner1.deinit();
+    // Wait for the window to be ready for consistent stacking order
+    try main_process_runner.waitForProcessWindowToBeReady(&x_window_finder, 1000);
 
-        // Start collecting logs
-        var child_output = ChildOutput.init(&build_process, allocator);
-        defer child_output.deinit();
-        _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&child_output});
+    var test_window_process_runner2 = try ChildProcessRunner.init(
+        "test window1",
+        &[_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0x8800ff00" },
+        allocator,
+    );
+    defer test_window_process_runner2.deinit();
+    // Wait for the window to be ready for consistent stacking order
+    try main_process_runner.waitForProcessWindowToBeReady(&x_window_finder, 1000);
 
-        // Wait for the build to finish successfully
-        const build_term = try build_process.wait();
-        std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term) catch |err| {
-            // Give some more context on why the build failed
-            std.debug.print("Failed to build test window\n", .{});
-            try printChildOutput(child_output, allocator);
-
-            // Return the original assertion error
-            return err;
-        };
-    }
-
-    const test_window_process1 = blk: {
-        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "50", "0", "0x88ff0000" };
-        var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
-        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
-        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
-        //
-        // We set this to `.Pipe` so we can see the output if the build fails.
-        test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Pipe;
-        test_window_process.stderr_behavior = .Pipe;
-
-        // Start the test_window process.
-        try test_window_process.spawn();
-
-        break :blk &test_window_process;
-    };
-    // Start collecting logs
-    var test_window_process1_child_output = ChildOutput.init(test_window_process1, allocator);
-    defer test_window_process1_child_output.deinit();
-    _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&test_window_process1_child_output});
-    // Kill the process when we're done
-    defer _ = test_window_process1.kill() catch |err| {
-        std.debug.print("Failed to kill test window process1: {}\n", .{err});
-    };
-    // Wait for test window to be ready so we get a consistent stacking order of the test
-    // windows. This isn't a perfect solution as we should ideally wait for the window to
-    // be mapped but it should be good enough.
-    x_window_finder.waitForProcessWindowToBeReady(test_window_process1.id, 1000) catch |err| {
-        // Give some more context what happened
-        std.debug.print("Failed to find the window for test process1\n", .{});
-        try printChildOutput(test_window_process1_child_output, allocator);
-
-        // Return the original assertion error
-        return err;
-    };
-
-    const test_window_process2 = blk: {
-        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0x8800ff00" };
-        var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
-        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
-        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
-        //
-        // We set this to `.Pipe` so we can see the output if the build fails.
-        test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Pipe;
-        test_window_process.stderr_behavior = .Pipe;
-
-        // Start the test_window process.
-        try test_window_process.spawn();
-
-        break :blk &test_window_process;
-    };
-    // Start collecting logs
-    var test_window_process2_child_output = ChildOutput.init(test_window_process2, allocator);
-    defer test_window_process2_child_output.deinit();
-    _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&test_window_process2_child_output});
-    // Kill the process when we're done
-    defer _ = test_window_process2.kill() catch |err| {
-        std.debug.print("Failed to kill test window process2: {}\n", .{err});
-    };
-    // Wait for test window to be ready so we get a consistent stacking order of the test
-    // windows. This isn't a perfect solution as should ideally wait for the window to
-    // be mapped but it should be good enough.
-    x_window_finder.waitForProcessWindowToBeReady(test_window_process2.id, 1000) catch |err| {
-        // Give some more context what happened
-        std.debug.print("Failed to find the window for test process2\n", .{});
-        try printChildOutput(test_window_process2_child_output, allocator);
-
-        // Return the original assertion error
-        return err;
-    };
-
-    const test_window_process3 = blk: {
-        const test_window_argv = [_][]const u8{ "./zig-out/bin/test_window", "100", "100", "0x880000ff" };
-        var test_window_process = std.ChildProcess.init(&test_window_argv, allocator);
-        // Prevent writing to `stdout` (default is `.Inherit`) so the test runner
-        // doesn't hang, see https://github.com/ziglang/zig/issues/15091
-        //
-        // We set this to `.Pipe` so we can see the output if the build fails.
-        test_window_process.stdin_behavior = .Ignore;
-        test_window_process.stdout_behavior = .Pipe;
-        test_window_process.stderr_behavior = .Pipe;
-
-        // Start the test_window process.
-        try test_window_process.spawn();
-
-        break :blk &test_window_process;
-    };
-    // Start collecting logs
-    var test_window_process3_child_output = ChildOutput.init(test_window_process3, allocator);
-    defer test_window_process3_child_output.deinit();
-    _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{&test_window_process3_child_output});
-    // Kill the process when we're done
-    defer _ = test_window_process3.kill() catch |err| {
-        std.debug.print("Failed to kill test window process3: {}\n", .{err});
-    };
-    // Wait for test window to be ready so we get a consistent stacking order of the test
-    // windows. This isn't a perfect solution as should ideally wait for the window to
-    // be mapped but it should be good enough.
-    x_window_finder.waitForProcessWindowToBeReady(test_window_process3.id, 1000) catch |err| {
-        // Give some more context what happened
-        std.debug.print("Failed to find the window for test process3\n", .{});
-        try printChildOutput(test_window_process3_child_output, allocator);
-
-        // Return the original assertion error
-        return err;
-    };
+    var test_window_process_runner3 = try ChildProcessRunner.init(
+        "test window1",
+        &[_][]const u8{ "./zig-out/bin/test_window", "100", "100", "0x880000ff" },
+        allocator,
+    );
+    defer test_window_process_runner3.deinit();
+    // Wait for the window to be ready for consistent stacking order
+    try main_process_runner.waitForProcessWindowToBeReady(&x_window_finder, 1000);
 
     // Just wait some time so we can see that the windows are overlapping and we can see
     // them updating.
     std.time.sleep(2 * std.time.ns_per_s);
 
+    // TODO: Capture parts of the screen and ensure the windows are overlappign with
+    // transparency.
+
     // Assert that the processes are still running succesfully and nothing went wrong
     // during the tests (see
     // https://ziggit.dev/t/any-easy-way-to-check-if-the-childprocess-has-exited/3270)
-    const running_test_processes = [_]struct {
-        process_description: []const u8,
-        child_process: *const std.ChildProcess,
-        child_output: ChildOutput,
-    }{
-        .{
-            .process_description = "main compositing manager",
-            .child_process = main_process,
-            .child_output = main_process_child_output,
-        },
-        .{
-            .process_description = "test window1",
-            .child_process = test_window_process1,
-            .child_output = test_window_process1_child_output,
-        },
-        .{
-            .process_description = "test window2",
-            .child_process = test_window_process2,
-            .child_output = test_window_process2_child_output,
-        },
-        .{
-            .process_description = "test window3",
-            .child_process = test_window_process3,
-            .child_output = test_window_process3_child_output,
-        },
+    const running_processes = [_]ChildProcessRunner{
+        main_process_runner,
+        test_window_process_runner1,
+        test_window_process_runner2,
+        test_window_process_runner3,
     };
-    for (running_test_processes) |running_test_process| {
-        const wait_result = std.os.waitpid(
-            running_test_process.child_process.id,
-            // Make `waitpid` run non-blocking
+    for (running_processes) |running_process| {
+        const term = waitpid(
+            running_process.child_process.id,
+            // We specify `NOHANG` so we don't block and wait for a signal change. We
+            // just want to check the state as it is now.
             std.os.W.NOHANG,
         );
-        // If `pid` is 0, the process is still running (no state change yet)
-        if (wait_result.pid != 0) {
-            const term = statusToTerm(wait_result.status);
+        if (term != Term.Running) {
             std.debug.print(
                 "Expected the {s} process to be still be successfully running " ++
                     "at the end of the test but saw {any}\n",
-                .{ running_test_process.process_description, term },
+                .{ running_process.description, term },
             );
 
             // Give some more context on process might have exited
-            try printChildOutput(running_test_process.child_output, allocator);
+            try printChildOutput(running_process.child_output, allocator);
 
             return error.ProcessUnexpectedlyNoLongerRunning;
         }

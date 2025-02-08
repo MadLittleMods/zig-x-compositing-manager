@@ -34,7 +34,7 @@ Tested with Zig 0.11.0
         .name = "my-foo-project",
         .version = "0.0.0",
         .dependencies = .{
-            .@"zig-neural-networks" = .{
+            .@"zig-x-compositing-manager" = .{
                 .url = "https://github.com/MadLittleMods/zig-x-compositing-manager/archive/<some-commit-hash-abcde>.tar.gz",
                 .hash = "1220416f31bac21c9f69c2493110064324b2ba9e0257ce0db16fb4f94657124d7abc",
             },
