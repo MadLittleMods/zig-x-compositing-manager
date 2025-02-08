@@ -186,7 +186,8 @@ pub const ChildProcessRunner = struct {
         // Start collecting logs
         var child_output = try allocator.create(ChildOutput);
         child_output.* = ChildOutput.init(child_process, allocator);
-        // This thread will be killed by TODO
+        // We expect this thread to finish when it's done collecting logs (when the
+        // process exits).
         _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{child_output});
 
         return .{
