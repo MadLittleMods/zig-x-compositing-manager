@@ -821,7 +821,7 @@ test "end-to-end" {
     );
     defer test_window_process_runner1.deinit();
     // Wait for the window to be ready for consistent stacking order
-    try main_process_runner.waitForProcessWindowToBeReady(&x_window_finder, 1000);
+    try test_window_process_runner1.waitForProcessWindowToBeReady(&x_window_finder, 1000);
 
     var test_window_process_runner2 = try ChildProcessRunner.init(
         "test window1",
@@ -830,7 +830,7 @@ test "end-to-end" {
     );
     defer test_window_process_runner2.deinit();
     // Wait for the window to be ready for consistent stacking order
-    try main_process_runner.waitForProcessWindowToBeReady(&x_window_finder, 1000);
+    try test_window_process_runner2.waitForProcessWindowToBeReady(&x_window_finder, 1000);
 
     var test_window_process_runner3 = try ChildProcessRunner.init(
         "test window1",
@@ -839,7 +839,7 @@ test "end-to-end" {
     );
     defer test_window_process_runner3.deinit();
     // Wait for the window to be ready for consistent stacking order
-    try main_process_runner.waitForProcessWindowToBeReady(&x_window_finder, 1000);
+    try test_window_process_runner3.waitForProcessWindowToBeReady(&x_window_finder, 1000);
 
     // Just wait some time so we can see that the windows are overlapping and we can see
     // them updating.
