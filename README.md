@@ -80,7 +80,7 @@ zig build run-test_window -- 50 0 0x88ff0000
 > projects require you to install extra system dependencies to get things working. The
 > only thing you should need is the right version of Zig.
 
-Launch Xephyr (virtual X server that we can run our test in):
+Launch Xephyr (virtual X server that we can run our tests in):
 
 ```
 Xephyr :99 -screen 1920x1080x24 -retro
@@ -94,6 +94,12 @@ Xephyr :99 -screen 1920x1080x24 -retro
 Run the tests:
 
 ```sh
+DISPLAY=:99 zig build test --summary all
+```
+
+Filter down to only run specific tests:
+
+```sh
 DISPLAY=:99 zig build test --summary all -Dtest-filter="end-to-end"
 ```
 
@@ -101,3 +107,5 @@ If you're running into timeout errors and the Xehpyr screen is black instead of 
 retro checkerboard, it probably means our composite manager process was accidentally
 left running after the test ended and you just need to restart Xephyr to get a clean
 test environment again.
+
+![Three transparent windows overlapping each other with text updating to show how long each window has been running for. An end-to-end demonstration of the X compositing manager.](https://github.com/user-attachments/assets/887289ac-21d9-4213-accf-45da13ac1dcc)
