@@ -203,6 +203,7 @@ pub const ChildProcessRunner = struct {
     description: []const u8,
     child_output: *ChildOutput,
     child_process: *std.ChildProcess,
+    collect_logs_thread: std.Thread,
     allocator: std.mem.Allocator,
 
     pub fn init(
@@ -230,12 +231,13 @@ pub const ChildProcessRunner = struct {
         child_output.* = try ChildOutput.init(child_process, allocator);
         // We expect this thread to finish when it's done collecting logs (when the
         // process exits).
-        _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{child_output});
+        const collect_logs_thread = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{child_output});
 
         return .{
             .description = description,
             .child_output = child_output,
             .child_process = child_process,
+            .collect_logs_thread = collect_logs_thread,
             .allocator = allocator,
         };
     }
@@ -246,6 +248,12 @@ pub const ChildProcessRunner = struct {
             std.debug.print("Failed to kill {s}: {}\n", .{ self.description, err });
         };
         self.allocator.destroy(self.child_process);
+
+        // The thread should finish gracefully after the process exits. This makes sure
+        // that the `ChildOutput.collectOutputFromChildProcess` finishes up replacing
+        // `stdout` and `stderr` before we clean them up with the `ChildOutput.deinit`
+        // below.
+        self.collect_logs_thread.join();
 
         // Now that the process exited, the `child_output.sdout` and
         // `child_output.stderr` should have been replaced and we can clean up safely
