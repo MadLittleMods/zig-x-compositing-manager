@@ -82,14 +82,14 @@ zig build run-test_window -- 50 0 0x88ff0000
 
 Launch Xephyr (virtual X server that we can run our test in):
 
+```
+Xephyr :99 -screen 1920x1080x24 -retro
+```
+
  - `:99` specifies the display number to create/use in your virtual environment (you can use
    any number that doesn't collide with an existing display on your system)
  - `-screen 1920x1080x24` creates a 1920x1080 display with 24-bit color depth
  - `-retro` makes the cursor always visible
-
-```
-Xephyr :99 -screen 1920x1080x24 -retro
-```
 
 Run the tests:
 
