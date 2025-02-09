@@ -7,8 +7,11 @@ const XWindowFinder = @import("../x11/x_window_finder.zig").XWindowFinder;
 
 pub const ChildOutput = struct {
     child_process: *const std.ChildProcess,
-    stdout: std.ArrayList(u8),
-    stderr: std.ArrayList(u8),
+    // Because the `std.ChildProcess.id` becomes `undefined` after calling `wait()`, we
+    // need to store this separately to make sure we've cleaned up properly.
+    child_process_id: std.ChildProcess.Id,
+    stdout: *std.ArrayList(u8),
+    stderr: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
 
     /// The process must be started with `stdout_behavior` and `stderr_behavior` set to `.Pipe`
@@ -16,7 +19,7 @@ pub const ChildOutput = struct {
     /// child_process.stdout_behavior = .Pipe;
     /// child_process.stderr_behavior = .Pipe;
     /// ```
-    fn init(child_process: *const std.ChildProcess, allocator: std.mem.Allocator) ChildOutput {
+    fn init(child_process: *const std.ChildProcess, allocator: std.mem.Allocator) !ChildOutput {
         assert(
             child_process.stdout_behavior == .Pipe,
             "child_process.stdout_behavior must be set to .Pipe but saw {}",
@@ -28,17 +31,44 @@ pub const ChildOutput = struct {
             .{child_process.stderr_behavior},
         );
 
+        var stdout = try allocator.create(std.ArrayList(u8));
+        stdout.* = std.ArrayList(u8).init(allocator);
+
+        var stderr = try allocator.create(std.ArrayList(u8));
+        stderr.* = std.ArrayList(u8).init(allocator);
+
         return .{
             .child_process = child_process,
-            .stdout = std.ArrayList(u8).init(allocator),
-            .stderr = std.ArrayList(u8).init(allocator),
+            .child_process_id = child_process.id,
+            .stdout = stdout,
+            .stderr = stderr,
             .allocator = allocator,
         };
     }
 
     fn deinit(self: @This()) void {
+        // Make sure the process has exited by this point. Because of the quirky way
+        // that `std.ChildProcess.collectOutput(...)` works, it treats `stdout` and
+        // `stderr` as output parameters which also get overwritten once all of the
+        // output has been collected (in most cases, that's when the process exits). We
+        // don't want to deinit the `ChildOutput` and then have `stdout` and `stderr`
+        // get replaced which will leak because we thought we already cleaned up.
+        //
+        // See https://github.com/ziglang/zig/issues/20952 for notes on how awkward this
+        // is.
+        const term = checkCurrentStatusOfProcess(self.child_process_id);
+        assert(
+            term != .Running,
+            "Expected child process to be no longer running by the time we deinit the" ++
+                "`ChildOutput` to avoid memory leaks of `stdout` and `stderr`",
+            .{},
+        );
+
         self.stdout.deinit();
         self.stderr.deinit();
+
+        self.allocator.destroy(self.stdout);
+        self.allocator.destroy(self.stderr);
     }
 
     /// Collect the output text from a child process (stdout and stderr).
@@ -47,8 +77,8 @@ pub const ChildOutput = struct {
     /// (in most cases, that's when the process exits).
     fn collectOutputFromChildProcess(self: *@This()) void {
         self.child_process.collectOutput(
-            &self.stdout,
-            &self.stderr,
+            self.stdout,
+            self.stderr,
             std.math.maxInt(usize),
         ) catch |err| {
             // Add a placeholder in `stderr` that we failed to collect the logs. This is
@@ -109,11 +139,23 @@ pub const Term = union(enum) {
     NotFound: void,
 };
 
-/// Check if a process is still running, or not.
+/// Check the current status of a process without blocking.
 ///
+/// Good for checking if a process is still running, or not.
+pub fn checkCurrentStatusOfProcess(pid: std.os.pid_t) Term {
+    const term = waitpid(
+        pid,
+        // We specify `NOHANG` so we don't block and wait for a signal change. We
+        // just want to check the state as it is now.
+        std.os.W.NOHANG,
+    );
+
+    return term;
+}
+
 /// Modified version of `std.os.waitpid` so we can handle "still running" and "not
 /// found" cases (more friendly to work with).
-pub fn waitpid(pid: std.os.pid_t, flags: u32) Term {
+fn waitpid(pid: std.os.pid_t, flags: u32) Term {
     const Status = if (builtin.link_libc) c_int else u32;
     var status: Status = undefined;
     const coerced_flags = if (builtin.link_libc) @as(c_int, @intCast(flags)) else flags;
@@ -185,7 +227,7 @@ pub const ChildProcessRunner = struct {
 
         // Start collecting logs
         var child_output = try allocator.create(ChildOutput);
-        child_output.* = ChildOutput.init(child_process, allocator);
+        child_output.* = try ChildOutput.init(child_process, allocator);
         // We expect this thread to finish when it's done collecting logs (when the
         // process exits).
         _ = try std.Thread.spawn(.{}, ChildOutput.collectOutputFromChildProcess, .{child_output});
@@ -199,15 +241,17 @@ pub const ChildProcessRunner = struct {
     }
 
     pub fn deinit(self: @This()) void {
-        self.child_output.deinit();
-        self.allocator.destroy(self.child_output);
-
         // Kill the process when we're done
         _ = self.child_process.kill() catch |err| {
             std.debug.print("Failed to kill {s}: {}\n", .{ self.description, err });
         };
-
         self.allocator.destroy(self.child_process);
+
+        // Now that the process exited, the `child_output.sdout` and
+        // `child_output.stderr` should have been replaced and we can clean up safely
+        // (there is also some sanity check logic in `ChildOutput.deinit` to make sure).
+        self.child_output.deinit();
+        self.allocator.destroy(self.child_output);
     }
 
     pub fn waitForProcessToExitSuccessfully(self: *@This()) !void {

@@ -859,12 +859,7 @@ test "end-to-end" {
         test_window_process_runner3,
     };
     for (running_processes) |running_process| {
-        const term = child_process_utils.waitpid(
-            running_process.child_process.id,
-            // We specify `NOHANG` so we don't block and wait for a signal change. We
-            // just want to check the state as it is now.
-            std.os.W.NOHANG,
-        );
+        const term = child_process_utils.checkCurrentStatusOfProcess(running_process.child_process.id);
         if (term != child_process_utils.Term.Running) {
             std.debug.print(
                 "Expected the {s} process to be still be successfully running " ++
