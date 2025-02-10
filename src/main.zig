@@ -844,7 +844,7 @@ test "demo" {
 
     // Just wait some time so we can see that the windows are overlapping and we can see
     // them updating.
-    std.time.sleep(3 * std.time.ns_per_s);
+    std.time.sleep(4 * std.time.ns_per_s);
 
     // If you want to keep the demo running, just uncomment the following line
     // while (true) {}
