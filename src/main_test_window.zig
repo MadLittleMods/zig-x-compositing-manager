@@ -1,5 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const assertions = @import("utils/assertions.zig");
+const assert = assertions.assert;
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const render = @import("test_window/render.zig");
@@ -12,9 +14,15 @@ const render_utils = @import("utils/render_utils.zig");
 /// Example:
 /// DISPLAY=:99 zig build run-test_window -- 0 0 0xaaff6622
 ///
+/// Demo mode example:
+/// DISPLAY=:99 zig build run-test_window -- 0 0 0xaaff6622 demo 0 3
+///
 /// Arg 0: X position
 /// Arg 1: Y position
 /// Arg 2: Window background color
+/// Arg 3: Demo mode (optional)
+/// Arg 3: Demo mode window index (optional, 0-based)
+/// Arg 3: Demo mode number of windows total (optional)
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -28,7 +36,22 @@ pub fn main() !void {
     const position_x = try std.fmt.parseInt(i16, args[1], 10);
     const position_y = try std.fmt.parseInt(i16, args[2], 10);
     // 0xAARRGGBB
-    const window_background_color = try std.fmt.parseInt(u32, args[3], 0);
+    const window_background_color = try std.fmt.parseInt(
+        u32,
+        args[3],
+        // When the base is 0, it will automatically detect the base from the string prefix
+        0,
+    );
+
+    // Optional demo mode that will animate the windows around in a pattern
+    var demo_mode: bool = false;
+    var demo_mode_window_index: u32 = 0;
+    var demo_mode_num_windows: u32 = 1;
+    if (args.len > 4) {
+        demo_mode = args[4].len > 0;
+        demo_mode_window_index = try std.fmt.parseInt(u32, args[5], 10);
+        demo_mode_num_windows = try std.fmt.parseInt(u32, args[6], 10);
+    }
 
     try x.wsaStartup();
     const conn = try common.connect(allocator);
@@ -70,7 +93,7 @@ pub fn main() !void {
 
     // TODO: maybe need to call conn.setup.verify or something?
 
-    const state = AppState{
+    var state = AppState{
         .window_position = render_utils.Coordinate(i16){ .x = position_x, .y = position_y },
         .window_dimensions = render_utils.Dimensions{ .width = 200, .height = 200 },
         .window_background_color = window_background_color,
@@ -195,11 +218,42 @@ pub fn main() !void {
         .state = &state,
     };
 
-    // Keep drawing the window so the elapsed time is updated. We just want *something*
-    // that changes to show that the window contents are being updated when using the
-    // "compositing manager".
+    var demo_animation = DemoAnimation.init(.{
+        .window_index = demo_mode_window_index,
+        .num_windows = demo_mode_num_windows,
+    }, &state);
+
+    var previous_timestamp_ms = std.time.milliTimestamp();
     while (true) {
+        if (demo_mode) {
+            // Calculate delta time
+            const current_timestamp_ms = std.time.milliTimestamp();
+            defer previous_timestamp_ms = current_timestamp_ms;
+            const delta_time_ms = current_timestamp_ms - previous_timestamp_ms;
+            const delta_time_ms_float = @as(f32, @floatFromInt(delta_time_ms));
+
+            demo_animation.animate(delta_time_ms_float);
+
+            // Update the window
+            {
+                var msg: [x.configure_window.max_len]u8 = undefined;
+                const len = x.configure_window.serialize(&msg, .{
+                    .window_id = ids.window,
+                }, .{
+                    .x = state.window_position.x,
+                    .y = state.window_position.y,
+                    .width = @intCast(state.window_dimensions.width),
+                    .height = @intCast(state.window_dimensions.height),
+                });
+                try conn.send(msg[0..len]);
+            }
+        }
+
+        // Keep drawing the window so the elapsed time is updated. We just want *something*
+        // that changes to show that the window contents are being updated when using the
+        // "compositing manager".
         try render_context.render();
+
         // We don't need to render so often as the display refresh rate is only so fast.
         // Let's just say 120hz since it's not that important. This is just a cheap way
         // to prevent "spinning" and doesn't account for the rest of the time it takes
@@ -291,3 +345,46 @@ pub fn main() !void {
     //     }
     // }
 }
+
+const DemoAnimationConfig = struct {
+    center_x: f32 = 75,
+    center_y: f32 = 75,
+    radius: f32 = 75,
+    speed_radians_per_ms: f32 = (@as(f32, 0.5) * std.math.pi) / std.time.ms_per_s,
+
+    window_index: u32,
+    num_windows: u32,
+};
+
+const DemoAnimation = struct {
+    app_state: *AppState,
+
+    config: DemoAnimationConfig,
+    current_angle_radians: f32,
+
+    fn init(config: DemoAnimationConfig, app_state: *AppState) DemoAnimation {
+        assert(config.num_windows > 0, "num_windows must be greater than 0", .{});
+
+        return .{
+            .app_state = app_state,
+            .config = config,
+            .current_angle_radians = (2 * std.math.pi) * (@as(f32, @floatFromInt(config.window_index + 1)) /
+                @as(f32, @floatFromInt(config.num_windows))),
+        };
+    }
+
+    fn animate(self: *@This(), delta_time_ms_float: f32) void {
+        const new_angle_radians = self.current_angle_radians + (delta_time_ms_float * (self.config.speed_radians_per_ms));
+        defer self.current_angle_radians = new_angle_radians;
+
+        const x_position: f32 = self.config.center_x + self.config.radius * @cos(
+            new_angle_radians,
+        );
+        const y_position: f32 = self.config.center_y + self.config.radius * @sin(
+            new_angle_radians,
+        );
+
+        self.app_state.window_position.x = @intFromFloat(x_position);
+        self.app_state.window_position.y = @intFromFloat(y_position);
+    }
+};

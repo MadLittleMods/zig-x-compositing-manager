@@ -760,11 +760,126 @@ test {
     @import("std").testing.refAllDecls(@This());
 }
 
+// This test demo is meant to run on a 640x350 display. Create a virtual display
+// (via Xvfb or Xephyr) and point the tests to that display by setting the `DISPLAY`
+// environment variable (`DISPLAY=:99 zig build test`).
+//
+// Example: `Xephyr :99 -screen 640x350x24 -retro` (`-retro` to always show cursor)
+//
+// FIXME: Ideally, the tests should be self-contained and runnable without requiring
+// additional setup, such as manually creating and configuring a display of the correct
+// size. By default, it should just run in a headless environment and we'd have `Xvfb`
+// as a dependency that we'd automatically build ourselves to run the tests. I hate when
+// projects require you to install extra system dependencies to get things working. The
+// only thing you should need is the right version of Zig.
+test "demo" {
+    const allocator = std.testing.allocator;
+
+    // Get ready
+    var x_window_finder = try XWindowFinder.init(allocator);
+    defer x_window_finder.deinit();
+
+    // Ideally, we'd be able to build and run in the same command like `zig build
+    // run-test_window` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // able to kill the process cleanly. So we have to build and run in separate
+    // commands.
+    var main_build_process_runner = try ChildProcessRunner.init(
+        "main compositing manager build",
+        &[_][]const u8{ "zig", "build", "main" },
+        allocator,
+    );
+    defer main_build_process_runner.deinit();
+    try main_build_process_runner.waitForProcessToExitSuccessfully();
+
+    // Start the compositing manager process.
+    const main_process_runner = try ChildProcessRunner.init(
+        "main compositing manager",
+        &[_][]const u8{"./zig-out/bin/main"},
+        allocator,
+    );
+    defer main_process_runner.deinit();
+    // Wait for the compositing manager to be ready to handle new windows
+    try main_process_runner.waitForProcessWindowToBeReady(&x_window_finder, 1000);
+
+    // Build and create three overlapping test windows
+    //
+    // Ideally, we'd be able to build and run in the same command like `zig build
+    // run-test_window` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // able to kill the process cleanly. So we have to build and run in separate
+    // commands.
+    var test_window_build_process_runner = try ChildProcessRunner.init(
+        "test window build",
+        &[_][]const u8{ "zig", "build", "test_window" },
+        allocator,
+    );
+    defer test_window_build_process_runner.deinit();
+    try test_window_build_process_runner.waitForProcessToExitSuccessfully();
+
+    var test_window_process_runner1 = try ChildProcessRunner.init(
+        "test window1",
+        &[_][]const u8{ "./zig-out/bin/test_window", "50", "0", "0x88ff0000", "demo", "0", "3" },
+        allocator,
+    );
+    defer test_window_process_runner1.deinit();
+    // Wait for the window to be ready for consistent stacking order
+    try test_window_process_runner1.waitForProcessWindowToBeReady(&x_window_finder, 1000);
+
+    var test_window_process_runner2 = try ChildProcessRunner.init(
+        "test window1",
+        &[_][]const u8{ "./zig-out/bin/test_window", "0", "100", "0x8800ff00", "demo", "1", "3" },
+        allocator,
+    );
+    defer test_window_process_runner2.deinit();
+    // Wait for the window to be ready for consistent stacking order
+    try test_window_process_runner2.waitForProcessWindowToBeReady(&x_window_finder, 1000);
+
+    var test_window_process_runner3 = try ChildProcessRunner.init(
+        "test window1",
+        &[_][]const u8{ "./zig-out/bin/test_window", "100", "100", "0x880000ff", "demo", "2", "3" },
+        allocator,
+    );
+    defer test_window_process_runner3.deinit();
+    // Wait for the window to be ready for consistent stacking order
+    try test_window_process_runner3.waitForProcessWindowToBeReady(&x_window_finder, 1000);
+
+    // Just wait some time so we can see that the windows are overlapping and we can see
+    // them updating.
+    std.time.sleep(3 * std.time.ns_per_s);
+
+    // If you want to keep the demo running, just uncomment the following line
+    // while (true) {}
+
+    // Assert that the processes are still running succesfully and nothing went wrong
+    // during the tests (see
+    // https://ziggit.dev/t/any-easy-way-to-check-if-the-childprocess-has-exited/3270)
+    const running_processes = [_]ChildProcessRunner{
+        main_process_runner,
+        test_window_process_runner1,
+        test_window_process_runner2,
+        test_window_process_runner3,
+    };
+    for (running_processes) |running_process| {
+        const term = child_process_utils.checkCurrentStatusOfProcess(running_process.child_process.id);
+        if (term != child_process_utils.Term.Running) {
+            std.debug.print(
+                "Expected the {s} process to be still be successfully running " ++
+                    "at the end of the test but saw {any}\n",
+                .{ running_process.description, term },
+            );
+
+            // Give some more context on why the process might have exited
+            try child_process_utils.printChildOutput(running_process.child_output, allocator);
+
+            return error.ProcessUnexpectedlyNoLongerRunning;
+        }
+    }
+}
+
 // This test is meant to run on a 300x300 display. Create a virtual display (via Xvfb
 // or Xephyr) and point the tests to that display by setting the `DISPLAY` environment
 // variable (`DISPLAY=:99 zig build test`).
 //
-// Example: `Xephyr :99 -screen 1920x1080x24 -retro` (`-retro` to always show cursor)
+// Example: `Xephyr :99 -screen 300x300x24 -retro` (`-retro` to always show cursor)
 //
 // FIXME: Ideally, the tests should be self-contained and runnable without requiring
 // additional setup, such as manually creating and configuring a display of the correct
@@ -846,7 +961,7 @@ test "end-to-end" {
     // them updating.
     std.time.sleep(2 * std.time.ns_per_s);
 
-    // TODO: Capture parts of the screen and ensure the windows are overlappign with
+    // TODO: Capture parts of the screen and ensure the windows are overlapping with
     // transparency.
 
     // Assert that the processes are still running succesfully and nothing went wrong
