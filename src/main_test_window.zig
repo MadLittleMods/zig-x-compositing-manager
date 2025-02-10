@@ -351,6 +351,7 @@ const DemoAnimationConfig = struct {
     center_y: f32 = 75,
     radius: f32 = 75,
     speed_radians_per_ms: f32 = (@as(f32, 0.5) * std.math.pi) / std.time.ms_per_s,
+    scale_per_ms: f32 = @as(f32, 4) / std.time.ms_per_s,
 
     window_index: u32,
     num_windows: u32,
@@ -360,6 +361,7 @@ const DemoAnimation = struct {
     app_state: *AppState,
 
     config: DemoAnimationConfig,
+    start_timestamp_ms: i64,
     current_angle_radians: f32,
 
     fn init(config: DemoAnimationConfig, app_state: *AppState) DemoAnimation {
@@ -367,6 +369,7 @@ const DemoAnimation = struct {
 
         return .{
             .app_state = app_state,
+            .start_timestamp_ms = std.time.milliTimestamp(),
             .config = config,
             .current_angle_radians = (2 * std.math.pi) * (@as(f32, @floatFromInt(config.window_index + 1)) /
                 @as(f32, @floatFromInt(config.num_windows))),
@@ -374,6 +377,10 @@ const DemoAnimation = struct {
     }
 
     fn animate(self: *@This(), delta_time_ms_float: f32) void {
+        const current_timestamp_ms = std.time.milliTimestamp();
+        const elapsed_ms = current_timestamp_ms - self.start_timestamp_ms;
+        const elapsed_ms_float: f32 = @floatFromInt(elapsed_ms);
+
         const new_angle_radians = self.current_angle_radians + (delta_time_ms_float * (self.config.speed_radians_per_ms));
         defer self.current_angle_radians = new_angle_radians;
 
@@ -386,5 +393,21 @@ const DemoAnimation = struct {
 
         self.app_state.window_position.x = @intFromFloat(x_position);
         self.app_state.window_position.y = @intFromFloat(y_position);
+
+        const scale_normalized = pingPong(elapsed_ms_float * self.config.scale_per_ms);
+
+        self.app_state.window_dimensions.width = @intFromFloat(200 - (200 * 0.2 * scale_normalized));
+        self.app_state.window_dimensions.height = @intFromFloat(200 - (200 * 0.2 * scale_normalized));
     }
 };
+
+/// A periodic function that generates a triangle wave oscillating between 0 and 1.
+//
+// We could also accomplish this with `((arcsin(sin(pi*x - (pi/2)))) / pi) + 0.5` but
+// this is probably simpler
+fn pingPong(t: f32) f32 {
+    const asdf: f32 = (t - 1.0) / 2.0;
+    const fractional_part = asdf - @floor(asdf);
+    std.debug.print("asdf t: {d}, asdf: {d} {d}, fractional_part: {d} - {d} {d}\n", .{ t, asdf, @floor(asdf), fractional_part, fractional_part * 2.0 - 1.0, std.math.fabs(fractional_part * 2.0 - 1.0) });
+    return std.math.fabs(fractional_part * 2.0 - 1.0);
+}
