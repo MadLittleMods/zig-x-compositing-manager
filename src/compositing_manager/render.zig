@@ -56,6 +56,8 @@ pub const Ids = struct {
     // We need to create a "picture" version of every drawable for use with the X Render
     // extension.
     picture_window: u32 = 0,
+    // Picture for the background
+    picture_background: u32 = 0,
 
     // We need a X Fixes "region" ID for the window to interact with the X Damage API's
     region_window: u32 = 0,
@@ -258,6 +260,21 @@ pub fn createResources(
         });
         try x_connection.send(message_buffer[0..len]);
     }
+
+    // Create a picture for our black background
+    {
+        var message_buffer: [x.render.create_solid_fill.len]u8 = undefined;
+        x.render.create_solid_fill.serialize(&message_buffer, extensions.render.opcode, .{
+            .picture_id = ids.picture_background,
+            .color = .{
+                .red = 0x0000,
+                .green = 0x0000,
+                .blue = 0x0000,
+                .alpha = 0xffff,
+            },
+        });
+        try x_connection.send(&message_buffer);
+    }
 }
 
 pub fn cleanupResources(
@@ -294,43 +311,79 @@ pub const RenderContext = struct {
     pub fn render(self: *const @This()) !void {
         const sock = self.sock.*;
 
+        // Blank out the background to avoid previous frames smearing if windows move or resize
+        {
+            var msg: [x.render.composite.len]u8 = undefined;
+            x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
+                .picture_operation = .over,
+                .src_picture_id = self.ids.picture_background,
+                .mask_picture_id = 0,
+                .dst_picture_id = self.ids.picture_window,
+                .src_x = 0,
+                .src_y = 0,
+                .mask_x = 0,
+                .mask_y = 0,
+                .dst_x = 0,
+                .dst_y = 0,
+                .width = @intCast(self.state.root_screen_dimensions.width),
+                .height = @intCast(self.state.root_screen_dimensions.height),
+            });
+            try common.send(sock, &msg);
+        }
+
         var window_stacking_order_iterator = self.state.window_stacking_order.iterator();
         // Skip the first window because it's the root window and we don't render that
         _ = window_stacking_order_iterator.next();
         // Iterate over the rest of the windows and render them
         while (window_stacking_order_iterator.next()) |window_stacking_order| {
             const window_id = window_stacking_order.window_id;
-            if (self.state.window_map.get(window_id)) |window| {
-                const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
-                if (opt_picture_id) |picture_id| {
-                    // We use the `x.render.composite` request to instead of `x.copy_area`
-                    // because it supports copying from windows with differing depths and we
-                    // want the alpha/transparency support which only `x.render.composite`
-                    // can do.
-                    var msg: [x.render.composite.len]u8 = undefined;
-                    x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
-                        .picture_operation = .over,
-                        .src_picture_id = picture_id,
-                        .mask_picture_id = 0,
-                        .dst_picture_id = self.ids.picture_window,
-                        .src_x = 0,
-                        .src_y = 0,
-                        .mask_x = 0,
-                        .mask_y = 0,
-                        .dst_x = window.x,
-                        .dst_y = window.y,
-                        .width = window.width,
-                        .height = window.height,
-                    });
-                    try common.send(sock, &msg);
-                } else {
+            self.renderWindow(window_id) catch |err| switch (err) {
+                error.WindowNotFound => {
+                    std.log.err("No window found for `window_id` ({}) that was in the `window_stacking_order`", .{window_id});
+                    continue;
+                },
+                error.PictureNotFound => {
                     std.log.err("No `picture_id` found for `window_id` ({}) while iterating over the `window_stacking_order` and rendering", .{window_id});
                     continue;
-                }
+                },
+                else => {
+                    return err;
+                },
+            };
+        }
+    }
+
+    fn renderWindow(self: *const @This(), window_id: u32) !void {
+        const sock = self.sock.*;
+
+        if (self.state.window_map.get(window_id)) |window| {
+            const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
+            if (opt_picture_id) |picture_id| {
+                // We use the `x.render.composite` request to instead of `x.copy_area`
+                // because it supports copying from windows with differing depths and we
+                // want the alpha/transparency support which only `x.render.composite`
+                // can do.
+                var msg: [x.render.composite.len]u8 = undefined;
+                x.render.composite.serialize(&msg, self.extensions.render.opcode, .{
+                    .picture_operation = .over,
+                    .src_picture_id = picture_id,
+                    .mask_picture_id = 0,
+                    .dst_picture_id = self.ids.picture_window,
+                    .src_x = 0,
+                    .src_y = 0,
+                    .mask_x = 0,
+                    .mask_y = 0,
+                    .dst_x = window.x,
+                    .dst_y = window.y,
+                    .width = window.width,
+                    .height = window.height,
+                });
+                try common.send(sock, &msg);
             } else {
-                std.log.err("No window found for `window_id` ({}) that was in the `window_stacking_order`", .{window_id});
-                continue;
+                return error.PictureNotFound;
             }
+        } else {
+            return error.WindowNotFound;
         }
     }
 };
