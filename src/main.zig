@@ -760,6 +760,9 @@ test {
     @import("std").testing.refAllDecls(@This());
 }
 
+// Demo with three transparent overlapping windows traveling in a circle as they scale
+// up and down
+//
 // This test demo is meant to run on a 640x350 display. Create a virtual display
 // (via Xvfb or Xephyr) and point the tests to that display by setting the `DISPLAY`
 // environment variable (`DISPLAY=:99 zig build test`).

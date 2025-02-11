@@ -24,6 +24,9 @@ simply don't exist anymore. The topmost window owns that pixel.
 To accomplish transparency, we redirect the output of all windows to off-screen buffers
 and then composite them together to form the final image.
 
+![Demo with three transparent overlapping windows traveling in a circle as they scale up and down (`DISPLAY=:99 zig build test --summary all -Dtest-filter="demo"`)](https://github.com/user-attachments/assets/2132fa0a-33fa-4283-9597-5a9b799ba8d7)
+
+
 ### Install:
 
 Tested with Zig 0.11.0
