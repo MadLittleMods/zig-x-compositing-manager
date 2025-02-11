@@ -1,4 +1,4 @@
-### X Compositing Manager written in Zig
+# X Compositing Manager written in Zig
 
 A basic "compositing manager" (aka compositor) for the X Window System that adds transparency/alpha
 blending (compositing) to windows.
@@ -27,7 +27,7 @@ and then composite them together to form the final image.
 ![Demo with three transparent overlapping windows traveling in a circle as they scale up and down (`DISPLAY=:99 zig build test --summary all -Dtest-filter="demo"`)](https://github.com/user-attachments/assets/2132fa0a-33fa-4283-9597-5a9b799ba8d7)
 
 
-### Install:
+## Install:
 
 Tested with Zig 0.11.0
 
@@ -56,12 +56,12 @@ Tested with Zig 0.11.0
     exe_tests.addModule("zig-x-compositing-manager", x_compositing_manager_mod);
     ```
 
-### Usage:
+## Usage:
 
 TODO
 
 
-### Building
+## Building
 
 ```sh
 zig build run-main
@@ -72,7 +72,7 @@ zig build run-test_window -- 50 0 0x88ff0000
 ```
 
 
-### Testing
+## Testing
 
 > [!NOTE]
 >
