@@ -8,7 +8,7 @@ const x = @import("x");
 const common = @import("./x11_common.zig");
 const x11_extension_utils = @import("./x11_extension_utils.zig");
 
-/// Check to make sure we're using a compatible version of the X Input extension
+/// Check to make sure we're using a compatible version of the X Shape extension
 /// that supports all of the features we need.
 pub fn ensureCompatibleVersionOfXShapeExtension(
     x_connection: common.XConnection,
@@ -34,7 +34,7 @@ pub fn ensureCompatibleVersionOfXShapeExtension(
                     msg.major_version,
                     version.major_version,
                 });
-                return error.XInputExtensionTooNew;
+                return error.XShapeExtensionTooNew;
             }
             if (msg.minor_version < version.minor_version) {
                 std.log.err("X SHAPE extension minor version is {}.{} but I've only tested >= {}.{})", .{
@@ -43,7 +43,7 @@ pub fn ensureCompatibleVersionOfXShapeExtension(
                     version.major_version,
                     version.minor_version,
                 });
-                return error.XInputExtensionTooOld;
+                return error.XShapeExtensionTooOld;
             }
         },
         else => |msg| {
