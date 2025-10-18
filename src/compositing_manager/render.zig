@@ -358,6 +358,11 @@ pub const RenderContext = struct {
 
         if (self.state.window_map.get(window_id)) |window| {
             // Nothing to draw for hidden (unmapped) windows
+            //
+            // In the case of a window being unmapped/hidden (`unmap_notify`), it may
+            // also be quickly followed by a `destroy_notify` event from the X server if
+            // the window was being closed. If we don't early return here, we may try to
+            // render a window that has already been destroyed, leading to errors.
             if (!window.visible) {
                 return;
             }
