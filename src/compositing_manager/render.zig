@@ -357,6 +357,16 @@ pub const RenderContext = struct {
         const sock = self.sock.*;
 
         if (self.state.window_map.get(window_id)) |window| {
+            // Nothing to draw for hidden (unmapped) windows
+            //
+            // In the case of a window being unmapped/hidden (`unmap_notify`), it may
+            // also be quickly followed by a `destroy_notify` event from the X server if
+            // the window was being closed. If we don't early return here, we may try to
+            // render a window that has already been destroyed, leading to errors.
+            if (!window.visible) {
+                return;
+            }
+
             const opt_picture_id = self.state.window_to_picture_id_map.get(window_id);
             if (opt_picture_id) |picture_id| {
                 // We use the `x.render.composite` request to instead of `x.copy_area`
