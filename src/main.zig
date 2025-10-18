@@ -610,6 +610,7 @@ pub fn main() !void {
                     });
 
                     const window_picture_id = request_connection_id_generator.generateMonotonicId();
+                    std.log.info("Creating picture ID {0} 0x{0x} for window ID {1} 0x{1x}", .{ window_picture_id, msg.window });
                     try x_render_extension.createPictureForWindow(
                         x_request_connection,
                         window_picture_id,
