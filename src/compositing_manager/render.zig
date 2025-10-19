@@ -284,13 +284,13 @@ pub fn cleanupResources(
     // {
     //     var message_buffer: [x.free_pixmap.len]u8 = undefined;
     //     x.free_pixmap.serialize(&message_buffer, ids.pixmap);
-    //     try common.send(x_connection.socket, &message_buffer);
+    //     try x_connection.send(&message_buffer);
     // }
 
     {
         var message_buffer: [x.free_colormap.len]u8 = undefined;
         x.free_colormap.serialize(&message_buffer, ids.colormap);
-        try common.send(x_connection.socket, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     // TODO: free_gc
@@ -302,14 +302,14 @@ pub fn cleanupResources(
 /// methods. This is useful because we have to call `render()` in many places and we
 /// don't want to have to wrangle all of those arguments each time.
 pub const RenderContext = struct {
-    sock: *const std.os.socket_t,
+    x_connection: common.XConnection,
     ids: *const Ids,
     extensions: *const x11_extension_utils.Extensions(&.{ .composite, .render }),
     state: *const AppState,
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
 
         // Blank out the background to avoid previous frames smearing if windows move or resize
         {
@@ -328,7 +328,7 @@ pub const RenderContext = struct {
                 .width = @intCast(self.state.root_screen_dimensions.width),
                 .height = @intCast(self.state.root_screen_dimensions.height),
             });
-            try common.send(sock, &msg);
+            try x_connection.send(&msg);
         }
 
         var window_stacking_order_iterator = self.state.window_stacking_order.iterator();
@@ -354,7 +354,7 @@ pub const RenderContext = struct {
     }
 
     fn renderWindow(self: *const @This(), window_id: u32) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
 
         if (self.state.window_map.get(window_id)) |window| {
             // Nothing to draw for hidden (unmapped) windows
@@ -388,7 +388,7 @@ pub const RenderContext = struct {
                     .width = window.width,
                     .height = window.height,
                 });
-                try common.send(sock, &msg);
+                try x_connection.send(&msg);
             } else {
                 return error.PictureNotFound;
             }

@@ -21,7 +21,7 @@ pub fn ensureCompatibleVersionOfXShapeExtension(
     {
         var message_buffer: [x.shape.query_version.len]u8 = undefined;
         x.shape.query_version.serialize(&message_buffer, shape_extension.opcode);
-        try common.send(x_connection.socket, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
     const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
     try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);

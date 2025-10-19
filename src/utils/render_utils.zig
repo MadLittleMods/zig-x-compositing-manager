@@ -103,10 +103,10 @@ fn computeOffsetFromOrigin(length: i16, origin: OriginValue) i16 {
 }
 
 pub fn renderString(
-    sock: std.os.socket_t,
+    x_connection: common.XConnection,
     drawable_id: u32,
     fg_gc_id: u32,
-    font_dims: *const FontDims,
+    font_dims: FontDims,
     position_x: i16,
     position_y: i16,
     position_origin: PositionOrigin,
@@ -129,5 +129,5 @@ pub fn renderString(
         .x = baseline_x,
         .y = baseline_y,
     });
-    try common.send(sock, msg[0..x.image_text8.getLen(text_len)]);
+    try x_connection.send(msg[0..x.image_text8.getLen(text_len)]);
 }
