@@ -336,8 +336,7 @@ pub fn main() !void {
     for ([_]u32{ ids.window, ids.overlay_window_id }) |window_id| {
         {
             const wm_pid_atom = try common.intern_atom(
-                x_request_connection.socket,
-                x_request_connection.buffer,
+                x_request_connection,
                 comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
             );
 
@@ -466,7 +465,7 @@ pub fn main() !void {
     }
 
     var render_context = render.RenderContext{
-        .sock = &x_request_connection.socket,
+        .x_connection = x_request_connection,
         .ids = &ids,
         .extensions = &x11_extension_utils.Extensions(&.{ .composite, .render }){
             .composite = extensions.composite,
@@ -482,7 +481,7 @@ pub fn main() !void {
                 std.log.err("buffer size {} not big enough!", .{x_event_connection.buffer.half_len});
                 return error.BufferSizeNotBigEnough;
             }
-            const len = try x.readSock(x_event_connect_result.sock, receive_buffer, 0);
+            const len = try x.readSock(x_event_connection.socket, receive_buffer, 0);
             if (len == 0) {
                 std.log.info("X server connection closed", .{});
                 return;

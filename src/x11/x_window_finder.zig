@@ -38,8 +38,7 @@ pub const XWindowFinder = struct {
         // log.info("root window ID {0} 0x{0x}", .{screen.root});
 
         const wm_pid_atom = try common.intern_atom(
-            x_request_connection.socket,
-            x_request_connection.buffer,
+            x_request_connection,
             comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
         );
 

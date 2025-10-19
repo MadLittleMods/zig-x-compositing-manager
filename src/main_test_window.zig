@@ -54,44 +54,72 @@ pub fn main() !void {
     }
 
     try x.wsaStartup();
-    const conn = try common.connect(allocator);
-    defer std.os.shutdown(conn.sock, .both) catch {};
-    defer conn.setup.deinit(allocator);
-    const conn_setup_fixed_fields = conn.setup.fixed();
+
+    // We establish two distinct connections to the X server:
+    //
+    // 1. Event Connection: Used for reading events in the main event loop.
+    //    - Make sure to call `x.change_window_attributes` on the windows you care about
+    //      listening for events on. Specify `.event_mask` with the events you want the
+    //      event loop to subscribe to.
+    // 2. Request Connection: Used for making one-shot requests and reading their replies.
+    //
+    // This dual-connection approach offers several benefits:
+    // - Clear Separation: It keeps event handling separate from one-shot requests.
+    // - Simplified Reply Handling: We can easily get replies to one-shot requests
+    //   without worrying about them being mixed with event messages.
+    // - No Complex Queuing: Unlike the xcb library, we avoid the need for a
+    //   cookie-based reply queue system.
+    //
+    // This design leads to cleaner, more maintainable code by reducing complexity
+    // in handling different types of X server interactions.
+    //
+    // 1. Create an X connection for the event loop
+    const x_event_connect_result = try common.connect(allocator);
+    defer x_event_connect_result.setup.deinit(allocator);
+    const x_event_connection = try common.XConnection.init(
+        x_event_connect_result.sock,
+        1000,
+        allocator,
+    );
+    defer x_event_connection.deinit();
+    // 2. Create an X connection for making one-off requests
+    const x_request_connect_result = try common.connect(allocator);
+    defer x_request_connect_result.setup.deinit(allocator);
+    const x_request_connection = try common.XConnection.init(
+        x_request_connect_result.sock,
+        8000,
+        allocator,
+    );
+    defer x_request_connection.deinit();
+
+    const conn_setup_fixed_fields = x_event_connect_result.setup.fixed();
     // Print out some info about the X server we connected to
     {
         inline for (@typeInfo(@TypeOf(conn_setup_fixed_fields.*)).Struct.fields) |field| {
             std.log.debug("{s}: {any}", .{ field.name, @field(conn_setup_fixed_fields, field.name) });
         }
-        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
+        std.log.debug("vendor: {s}", .{try x_event_connect_result.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
     }
 
-    const screen = common.getFirstScreenFromConnectionSetup(conn.setup);
+    const screen = common.getFirstScreenFromConnectionSetup(x_event_connect_result.setup);
     inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
         std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
     }
-
     std.log.info("root window ID {0} 0x{0x}", .{screen.root});
+
+    // Since each connection has a `base_resource_id`, let's create most resources with
+    // the request connection since that's easier
+    var request_connection_id_generator = render.IdGenerator.init(
+        x_request_connect_result.setup.fixed().resource_id_base,
+    );
     const ids = render.Ids.init(
         screen.root,
-        conn.setup.fixed().resource_id_base,
+        &request_connection_id_generator,
     );
     std.log.debug("ids: {any}", .{ids});
     std.log.info("ids.window {0} 0x{0x}", .{ids.window});
 
     const depth = 32;
-
-    // Create a big buffer that we can use to read messages and replies from the X server.
-    const double_buffer = try x.DoubleBuffer.init(
-        std.mem.alignForward(usize, 8000, std.mem.page_size),
-        .{ .memfd_name = "ZigX11DoubleBuffer" },
-    );
-    defer double_buffer.deinit(); // not necessary but good to test
-    std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
-    var buffer = double_buffer.contiguousReadBuffer();
-    const buffer_limit = buffer.half_len;
-
-    // TODO: maybe need to call conn.setup.verify or something?
 
     var state = AppState{
         .window_position = render_utils.Coordinate(i16){ .x = position_x, .y = position_y },
@@ -101,23 +129,21 @@ pub fn main() !void {
     };
 
     try render.createResources(
-        conn.sock,
-        &buffer,
+        x_request_connection,
         &ids,
         screen,
         depth,
         &state,
     );
     // Clean-up and free resources
-    defer render.cleanupResources(conn.sock, &ids) catch |err| {
+    defer render.cleanupResources(x_request_connection, &ids) catch |err| {
         std.log.err("Failed to cleanup resoures: {}", .{err});
     };
 
     // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
     {
         const wm_pid_atom = try common.intern_atom(
-            conn.sock,
-            &buffer,
+            x_request_connection,
             comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
         );
 
@@ -145,7 +171,7 @@ pub fn main() !void {
             .type = x.Atom.CARDINAL,
             .values = x.Slice(u16, [*]const u32){ .ptr = &pid_array, .len = pid_array.len },
         });
-        try conn.send(message_buffer[0..]);
+        try x_request_connection.send(message_buffer[0..]);
     }
     // "If _NET_WM_PID is set, the ICCCM-specified property WM_CLIENT_MACHINE MUST also be set."
     // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
@@ -168,7 +194,7 @@ pub fn main() !void {
             .type = x.Atom.STRING,
             .values = x.Slice(u16, [*]const u8){ .ptr = machine_name.ptr, .len = @intCast(machine_name.len) },
         });
-        try conn.send(message_buffer);
+        try x_request_connection.send(message_buffer);
     }
 
     // Get some font information
@@ -180,12 +206,12 @@ pub fn main() !void {
         const text = x.Slice(u16, [*]const u16){ .ptr = &text_literal, .len = text_literal.len };
         var message_buffer: [x.query_text_extents.getLen(text.len)]u8 = undefined;
         x.query_text_extents.serialize(&message_buffer, ids.fg_gc, text);
-        try conn.send(&message_buffer);
+        try x_request_connection.send(&message_buffer);
     }
     const font_dims: render_utils.FontDims = blk: {
-        const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
-        try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+        const message_length = try x.readOneMsg(x_request_connection.reader(), @alignCast(x_request_connection.buffer.nextReadBuffer()));
+        try common.checkMessageLengthFitsInBuffer(message_length, x_request_connection.buffer.half_len);
+        switch (x.serverMsgTaggedUnion(@alignCast(x_request_connection.buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.ServerMsg.QueryTextExtents = @ptrCast(msg_reply);
                 break :blk .{
@@ -208,11 +234,11 @@ pub fn main() !void {
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
-        try conn.send(&msg);
+        try x_request_connection.send(&msg);
     }
 
     var render_context = render.RenderContext{
-        .sock = &conn.sock,
+        .x_connection = x_request_connection,
         .ids = &ids,
         .font_dims = &font_dims,
         .state = &state,
@@ -245,7 +271,7 @@ pub fn main() !void {
                     .width = @intCast(state.window_dimensions.width),
                     .height = @intCast(state.window_dimensions.height),
                 });
-                try conn.send(msg[0..len]);
+                try x_request_connection.send(msg[0..len]);
             }
         }
 

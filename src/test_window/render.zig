@@ -6,17 +6,35 @@ const AppState = @import("app_state.zig").AppState;
 const render_utils = @import("../utils/render_utils.zig");
 const FontDims = render_utils.FontDims;
 
+/// Generate new resource IDs for X resources.
+pub const IdGenerator = struct {
+    /// The base resource ID that we can increment from to assign and designate to new
+    /// resources.
+    base_resource_id: u32,
+    /// (not for external use) - Tracks the current incremented ID
+    _current_id: u32,
+
+    pub fn init(base_resource_id: u32) @This() {
+        return .{
+            .base_resource_id = base_resource_id,
+            ._current_id = base_resource_id,
+        };
+    }
+
+    /// Returns an ever-increasing ID everytime the function is called
+    pub fn generateMonotonicId(self: *@This()) u32 {
+        const current_id = self._current_id;
+        self._current_id += 1;
+        return current_id;
+    }
+};
+
 /// Stores the IDs of the all of the resources used when communicating with the X Window server.
 pub const Ids = struct {
     const Self = @This();
 
     /// The drawable ID of the root window
     root: u32,
-    /// The base resource ID that we can increment from to assign and designate to new
-    /// resources.
-    base_resource_id: u32,
-    /// (not for external use) - Tracks the current incremented ID
-    _current_id: u32,
 
     /// The drawable ID of our window
     window: u32 = 0,
@@ -26,11 +44,9 @@ pub const Ids = struct {
     /// Foreground graphics context
     fg_gc: u32 = 0,
 
-    pub fn init(root: u32, base_resource_id: u32) Self {
+    pub fn init(root: u32, id_generator: *IdGenerator) @This() {
         var ids = Ids{
             .root = root,
-            .base_resource_id = base_resource_id,
-            ._current_id = base_resource_id,
         };
 
         // For any ID that isn't set yet (still has the default value of 0), generate
@@ -38,34 +54,22 @@ pub const Ids = struct {
         // for each new one added.
         inline for (std.meta.fields(@TypeOf(ids))) |field| {
             if (@field(ids, field.name) == 0) {
-                @field(ids, field.name) = ids.generateMonotonicId();
+                @field(ids, field.name) = id_generator.generateMonotonicId();
             }
         }
 
         return ids;
     }
-
-    /// Returns an ever-increasing ID everytime the function is called
-    fn generateMonotonicId(self: *Ids) u32 {
-        const current_id = self._current_id;
-        self._current_id += 1;
-        return current_id;
-    }
 };
 
 /// Bootstraps all of the X resources we will need use when rendering the UI.
 pub fn createResources(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     ids: *const Ids,
     screen: *align(4) x.Screen,
     depth: u8,
     state: *const AppState,
 ) !void {
-    _ = buffer;
-    // const reader = common.SocketReader{ .context = sock };
-    // const buffer_limit = buffer.half_len;
-
     const window_position = state.window_position;
     const window_dimensions = state.window_dimensions;
     const window_background_color = state.window_background_color;
@@ -92,7 +96,7 @@ pub fn createResources(
             .visual_id = matching_visual_type.id,
             .alloc = .none,
         });
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
     {
         std.log.debug("Creating window_id {0} 0x{0x}", .{ids.window});
@@ -138,7 +142,7 @@ pub fn createResources(
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
             // .dont_propagate = 1,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     {
@@ -159,7 +163,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
     {
         const color_black: u32 = 0xff000000;
@@ -179,25 +183,25 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 }
 
 /// Cleanup and free resources
 pub fn cleanupResources(
-    sock: std.os.socket_t,
+    x_connection: common.XConnection,
     ids: *const Ids,
 ) !void {
     // {
     //     var message_buffer: [x.free_pixmap.len]u8 = undefined;
     //     x.free_pixmap.serialize(&message_buffer, ids.pixmap);
-    //     try common.send(sock, &message_buffer);
+    //     try x_connection.send(&message_buffer);
     // }
 
     {
         var message_buffer: [x.free_colormap.len]u8 = undefined;
         x.free_colormap.serialize(&message_buffer, ids.colormap);
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     // TODO: free_gc
@@ -209,14 +213,15 @@ pub fn cleanupResources(
 /// methods. This is useful because we have to call `render()` in many places and we
 /// don't want to have to wrangle all of those arguments each time.
 pub const RenderContext = struct {
-    sock: *const std.os.socket_t,
+    x_connection: common.XConnection,
     ids: *const Ids,
     font_dims: *const FontDims,
     state: *const AppState,
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
+        const font_dims = self.font_dims.*;
 
         const current_timestamp_ms = std.time.milliTimestamp();
         const elapsed_ms = current_timestamp_ms - self.state.start_timestamp_ms;
@@ -229,10 +234,10 @@ pub const RenderContext = struct {
         // CSS) to make the numbers not jiggle as much when they change. We could also
         // use a monospace font as a cheap way out.
         try render_utils.renderString(
-            sock,
+            x_connection,
             self.ids.window,
             self.ids.fg_gc,
-            self.font_dims,
+            font_dims,
             @divFloor(self.state.window_dimensions.width, 2),
             @divFloor(self.state.window_dimensions.height, 2),
             render_utils.PositionOrigin.init(.{ .keyword = .center }, .{ .keyword = .center }),
