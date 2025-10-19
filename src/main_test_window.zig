@@ -289,27 +289,27 @@ pub fn main() !void {
 
     // while (true) {
     //     {
-    //         const receive_buffer = buffer.nextReadBuffer();
+    //         const receive_buffer = x_event_connection.buffer.nextReadBuffer();
     //         if (receive_buffer.len == 0) {
-    //             std.log.err("buffer size {} not big enough!", .{buffer.half_len});
+    //             std.log.err("buffer size {} not big enough!", .{x_event_connection.buffer.half_len});
     //             return error.BufferSizeNotBigEnough;
     //         }
-    //         const len = try x.readSock(conn.sock, receive_buffer, 0);
+    //         const len = try x.readSock(x_event_connection.socket, receive_buffer, 0);
     //         if (len == 0) {
     //             std.log.info("X server connection closed", .{});
     //             return;
     //         }
-    //         buffer.reserve(len);
+    //         x_event_connection.buffer.reserve(len);
     //     }
 
     //     while (true) {
-    //         const data = buffer.nextReservedBuffer();
+    //         const data = x_event_connection.buffer.nextReservedBuffer();
     //         if (data.len < 32)
     //             break;
     //         const msg_len = x.parseMsgLen(data[0..32].*);
     //         if (data.len < msg_len)
     //             break;
-    //         buffer.release(msg_len);
+    //         x_event_connection.buffer.release(msg_len);
 
     //         //buf.resetIfEmpty();
     //         switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
