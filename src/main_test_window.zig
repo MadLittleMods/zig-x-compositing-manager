@@ -427,13 +427,30 @@ const DemoAnimation = struct {
     }
 };
 
-/// A periodic function that generates a triangle wave oscillating between 0 and 1.
+/// A periodic function that generates a triangle wave oscillating between 0 and 1 as t passes (period of 2).
+/// t=0 -> 0
+/// t=1 -> 1
+/// t=2 -> 0
+/// t=3 -> 1, etc.
 //
 // We could also accomplish this with `((arcsin(sin(pi*x - (pi/2)))) / pi) + 0.5` but
 // this is probably simpler
 fn pingPong(t: f32) f32 {
-    const asdf: f32 = (t - 1.0) / 2.0;
-    const fractional_part = asdf - @floor(asdf);
-    std.debug.print("asdf t: {d}, asdf: {d} {d}, fractional_part: {d} - {d} {d}\n", .{ t, asdf, @floor(asdf), fractional_part, fractional_part * 2.0 - 1.0, std.math.fabs(fractional_part * 2.0 - 1.0) });
-    return std.math.fabs(fractional_part * 2.0 - 1.0);
+    return std.math.fabs(t - @floor(t));
+}
+
+test "pingPong" {
+    assert(pingPong(-3.0) == 1.0);
+    assert(pingPong(-2.5) == 0.5);
+    assert(pingPong(-2.0) == 0.0);
+    assert(pingPong(-1.5) == 0.5);
+    assert(pingPong(-1.0) == 1.0);
+    assert(pingPong(-0.5) == 0.5);
+    assert(pingPong(0.0) == 0.0);
+    assert(pingPong(0.5) == 0.5);
+    assert(pingPong(1.0) == 1.0);
+    assert(pingPong(1.5) == 0.5);
+    assert(pingPong(2.0) == 0.0);
+    assert(pingPong(2.5) == 0.5);
+    assert(pingPong(3.0) == 1.0);
 }
