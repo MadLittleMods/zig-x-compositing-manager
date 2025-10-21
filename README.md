@@ -27,7 +27,22 @@ and then composite them together to form the final image.
 ![Demo with three transparent overlapping windows traveling in a circle as they scale up and down (`DISPLAY=:99 zig build test --summary all -Dtest-filter="demo"`)](https://github.com/user-attachments/assets/2132fa0a-33fa-4283-9597-5a9b799ba8d7)
 
 
-## Install:
+## Build and run standalone executable
+
+Tested with Zig 0.11.0
+
+ 1. Build and run: `zig build run-main`
+ 1. Alternatively, you can build `zig build main` and run the binary artifact
+    `./zig-out/bin/main`
+
+
+## Install as a dependency in your Zig project
+
+The compositing manager is meant to be used as a standalone executable to run alongside
+your other X applications. However, it's still possible to include it as a dependency in
+your own Zig project and build the `x-compositing-manager` executable from there. You
+would probably want to do this if you wanted to programmatically launch the compositing
+manager in your own Zig tests.
 
 Tested with Zig 0.11.0
 
@@ -44,24 +59,91 @@ Tested with Zig 0.11.0
         },
     }
     ```
- 1. Update your `build.zig` to include the module:
+ 1. Update your `build.zig` to build the executable:
     ```zig
-    const x_compositing_manager_pkg = b.dependency("zig-x-compositing-manager", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const x_compositing_manager_mod = x_compositing_manager_pkg.module("zig-x-compositing-manager");
-    // Make the `zig-x-compositing-manager` module available to be imported via `@import("zig-x-compositing-manager")`
-    exe.addModule("zig-x-compositing-manager", x_compositing_manager_mod);
-    exe_tests.addModule("zig-x-compositing-manager", x_compositing_manager_mod);
+    // Building the x-compositing-manager executable from our dependency
+    {
+        const x_compositing_manager_dep = b.dependency("zig-x-compositing-manager", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        const x_compositing_manager_dep_exe = x_compositing_manager_dep.artifact("main");
+        const install_artifact = b.addInstallArtifact(x_compositing_manager_dep_exe, .{
+            // Rename the binary artifact
+            .dest_sub_path = "x-compositing-manager",
+        });
+
+        const build_step = b.step("x-compositing-manager", "Build x-compositing-manager");
+        build_step.dependOn(&install_artifact.step);
+        all_step.dependOn(&install_artifact.step);
+
+        const run_artifact = b.addRunArtifact(x_compositing_manager_dep_exe);
+        run_artifact.step.dependOn(&install_artifact.step);
+        // This allows the user to pass arguments to the application in the build
+        // command itself, like this: `zig build run -- arg1 arg2 etc`
+        if (b.args) |args| {
+            run_artifact.addArgs(args);
+        }
+
+        const run_step = b.step("run-x-compositing-manager", "Run x-compositing-manager");
+        run_step.dependOn(&run_artifact.step);
+    }
+    ```
+ 1. To run the compositing manager from your project, first use a `std.process.Child` to
+    build it using `zig build x-compositing-manager`. Then, execute the generated binary
+    in another `std.process.Child`, `./zig-out/bin/x-compositing-manager`.
+
+    Ideally, we'd be able to use `zig build run-x-compositing-manager` directly to both
+    build and run the executable in a single command in a `std.process.Child`, but
+    [`ziglang/zig#20853`](https://github.com/ziglang/zig/issues/20853) prevents us from
+    being able to kill the process cleanly.
+    ```zig
+    test "run X applications with the compositing manager" {
+        const allocator = std.testing.allocator;
+
+        // Ideally, we'd be able to build and run in the same command like `zig build
+        // run-screen_play` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+        // able to kill the process cleanly. So we have to build and run in separate
+        // commands.
+        {
+            const argv = [_][]const u8{ "zig", "build", "x-compositing-manager" };
+            var build_process = std.process.Child.init(&argv, allocator);
+            // Prevent writing to `stdout` so the test runner doesn't hang,
+            // see https://github.com/ziglang/zig/issues/15091
+            build_process.stdin_behavior = .Ignore;
+            build_process.stdout_behavior = .Ignore;
+            build_process.stderr_behavior = .Ignore;
+            try build_process.spawn();
+            const build_term = try build_process.wait();
+            try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term);
+        }
+        var compositing_manager_process = blk: {
+            const argv = [_][]const u8{"./zig-out/bin/x-compositing-manager"};
+            var compositing_manager_process = std.process.Child.init(&argv, allocator);
+            // Prevent writing to `stdout` so the test runner doesn't hang,
+            // see https://github.com/ziglang/zig/issues/15091
+            compositing_manager_process.stdin_behavior = .Ignore;
+            compositing_manager_process.stdout_behavior = .Ignore;
+            compositing_manager_process.stderr_behavior = .Ignore;
+            try compositing_manager_process.spawn();
+
+            break :blk compositing_manager_process;
+        };
+
+        // Test your own X applications
+        //
+        // This sleep is just a stub for your own X applications running
+        std.time.sleep(3 * std.time.ns_per_s);
+
+        // Kill the compositing manager process when we're done
+        _ = try compositing_manager_process.kill();
+    }
     ```
 
-## Usage:
 
-TODO
+## Development
 
-
-## Building
+### Building
 
 ```sh
 zig build run-main
@@ -72,7 +154,7 @@ zig build run-test_window -- 50 0 0x88ff0000
 ```
 
 
-## Testing
+### Testing
 
 > [!NOTE]
 >
